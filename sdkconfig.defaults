@@ -1,0 +1,67 @@
+# CrowPanel ESP32-S3 4.3" IVF VOC Monitor - sdkconfig defaults
+# Verified against the working hello-world config for this specific board (ESP32-S3 N4R2).
+# Run: delete sdkconfig → idf.py build  (sdkconfig is auto-generated from these defaults)
+
+# --- Target ---
+CONFIG_IDF_TARGET="esp32s3"
+
+# --- CPU ---
+CONFIG_ESP32S3_DEFAULT_CPU_FREQ_240=y
+
+# --- Flash ---
+# Board: 4MB flash, QIO mode (NOT DIO — wrong mode prevents boot entirely)
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHMODE_QIO=y
+CONFIG_ESPTOOLPY_FLASHFREQ_80M=y
+
+# --- PSRAM ---
+# Board is ESP32-S3 N4R2: 4MB flash + 2MB QSPI PSRAM.
+# N4R2 uses QUAD (QSPI) PSRAM — NOT octal. OPI mode reads ID as 0x00000000 on this chip.
+# The RGB framebuffer (261KB) is placed in PSRAM — see display_driver.c fb_in_psram=1.
+CONFIG_ESP32S3_SPIRAM_SUPPORT=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_QUAD=y
+CONFIG_SPIRAM_SPEED_80M=y
+CONFIG_SPIRAM_USE_MALLOC=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# --- RGB LCD ---
+# Keep LCD ISR handler in IRAM so display DMA isn't starved during cache misses.
+CONFIG_LCD_RGB_ISR_IRAM_SAFE=y
+
+# --- FreeRTOS ---
+CONFIG_FREERTOS_HZ=1000
+CONFIG_FREERTOS_UNICORE=n
+
+# --- Stack sizes ---
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=8192
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=4096
+
+# --- Logging ---
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+
+# --- NVS (for settings persistence) ---
+CONFIG_NVS_ENCRYPTION=n
+
+# --- Console (UART0, not USB-JTAG) ---
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_UART_NUM=0
+CONFIG_ESP_CONSOLE_UART_BAUDRATE=115200
+
+# --- LVGL (Kconfig mode — managed component defaults to CONFIG_LV_CONF_SKIP=y) ---
+# lv_conf.h in main/lvgl_port/ is NOT used; all LVGL settings come from Kconfig.
+# Color depth 16 and LV_COLOR_16_SWAP=0 are already Kconfig defaults (correct for esp_lcd_panel_rgb).
+
+# Fonts required by our UI (Montserrat 14 is the only Kconfig default; add the rest here)
+CONFIG_LV_FONT_MONTSERRAT_12=y
+CONFIG_LV_FONT_MONTSERRAT_16=y
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_24=y
+CONFIG_LV_FONT_MONTSERRAT_32=y
+CONFIG_LV_FONT_MONTSERRAT_48=y
+
+# Dark theme — required for IVF lab low-light environment
+CONFIG_LV_THEME_DEFAULT_DARK=y
+
+# Memory pool — default 32KB is too small for 5 screens + charts; increase to 64KB
+CONFIG_LV_MEM_SIZE_KILOBYTES=64
