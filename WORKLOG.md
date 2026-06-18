@@ -3,7 +3,7 @@
 **Device:** CrowPanel DIS06043H v2.1 (ESP32-S3 N4R2, 480×272 RGB565)  
 **Stack:** ESP-IDF 5.3.1 · LVGL 8.4.0 (managed component)  
 **UI orientation:** Portrait 272×480 (hardware rotation via RGB panel SWAP_XY + MIRROR_Y)  
-**Last updated:** 2026-06-17
+**Last updated:** 2026-06-18
 
 ---
 
@@ -133,32 +133,102 @@ Replaced dark-theme 480×272 landscape navigation shell with light-theme 272×48
 
 ---
 
-### ⬜ Phase 3 — Dashboard Screen (Arc Gauge + Sparklines)
+### ✅ Phase 3A — Dashboard Visual Implementation (Frozen)
+**Status: FROZEN · Final build verified (zero errors, zero warnings)**
+
+**Goal:** Replace the empty dashboard stub with the full approved visual design — multi-zone arc gauge, TVOC reading in arc centre with level badge, temperature and humidity sensor cards each with a sparkline.
+
+**Geometry (frozen values):**
+
+| Constant | Value | Notes |
+|----------|-------|-------|
+| `ARC_SIZE` | 210 px | Diameter |
+| `ARC_WIDTH` | 18 px | Thicker track |
+| `ARC_CX` | 136 | Content-relative arc centre X |
+| `ARC_CY` | 160 | Content-relative arc centre Y (shifted down to clear TVOC title) |
+| `ARC_TOP_X` | 31 | = ARC_CX − ARC_SIZE/2 |
+| `ARC_TOP_Y` | 55 | = ARC_CY − ARC_SIZE/2 |
+| `CARD_Y` | 255 | Content-relative top of sensor cards |
+| `CARD_W` | 124 px | Per card |
+| `CARD_H` | 110 px | Reduced from 140 to give arc breathing room |
+| Chart height | 36 px | Sparkline within card |
+| Sparkline points | 30 | Smooth polyline |
+
+**Design implemented:**
+- Content area: 272×386 px (y=44, h=IVF_CONTENT_H=386)
+- Arc gauge: 210×210 px, track width 18 px, 4 static colour zones (see below)
+- Scale labels 0/250/500/750/1000 — pixel-exact absolute positions via `make_scale_label_abs()` (tuned on device, no cosf/sinf at runtime)
+- Centre value stack: "245" (`IVF_FONT_HUGE`) / "ppb" (`IVF_FONT_NORMAL`) / "GOOD ✓" pill badge — flex column in transparent 130×115 container at (71, 103)
+- Sensor cards: 124×110 each at y=255 content-relative
+- Sparklines: 30-point, smooth polyline, no point markers (`lv_style_size=0` on `LV_PART_INDICATOR`)
+- Header: leaf dot (green 14×14 circle) LEFT_MID x=8; title `IVF_FONT_SMALL` LEFT_MID x=26; `LV_SYMBOL_WIFI` at TOP_RIGHT x=−28; `LV_SYMBOL_SD_CARD` at TOP_RIGHT x=−8; time y=18; date y=30
+
+**Arc gauge zones:**
+| Zone | ppb range | LVGL angles | Colour |
+|------|-----------|-------------|--------|
+| Green | 0 – 250 | 135° → 202° | `#43A047` |
+| Yellow | 250 – 500 | 202° → 270° | `#FDD835` (local `DASH_COLOR_YELLOW`) |
+| Orange | 500 – 750 | 270° → 338° | `#FB8C00` |
+| Red | 750 – 1000 | 338° → 45° | `#E53935` |
+
+All 4 zone arcs always fully visible (static). No indicator arm — value shown by centre label only.
+
+**Scale label pixel coordinates (content-relative, centre of text):**
+| Label | X | Y |
+|-------|---|---|
+| "0" | 48 | 245 |
+| "250" | 20 | 125 |
+| "500" | 136 | 40 |
+| "750" | 253 | 125 |
+| "1000" | 220 | 245 |
+
+**Key fixes across three iterations:**
+- Removed dark navy `s_arc_value` arc that was covering zone arcs
+- Added 4th yellow zone (was missing in first build)
+- Corrected zone angle boundaries and scale labels (0/250/500/750/1000)
+- Chart dots removed via `lv_obj_set_style_size(chart, 0, LV_PART_INDICATOR)`
+- Icons: `lv_obj` primitives (stem+bulb thermometer, round-rect drop)
+- Card labels uppercased: "TEMPERATURE", "HUMIDITY"
+- Header title: moved from CENTER to LEFT_MID, font reduced to `IVF_FONT_SMALL` (prevents overlap with right-side time/date)
+- Added `LV_SYMBOL_SD_CARD` to header (right of WiFi)
+- TVOC title / "500" label overlap resolved: `ARC_CY` 131→160, `ARC_WIDTH` 14→18
+- Scale labels switched from runtime trigonometry to `make_scale_label_abs()` with device-tuned pixel coords
+- Card height 140→110 px, chart height reduced to 36 px
+- Data points increased to 30 for smoother sparklines
+
+**Files changed:**
+- `main/ui/screens/screen_dashboard.c` — Full implementation (three iterations + freeze cleanup)
+- `main/ui/screens/screen_dashboard.h` — Added `dashboard_set_time()` and `dashboard_set_date()` API
+
+**Static widget handles (runtime-updated in Phase 3B):**
+```c
+s_lbl_tvoc_value   s_lbl_temp_value   s_lbl_hum_value
+s_lbl_level        s_chart_temp       s_chart_hum
+s_lbl_time         s_lbl_date
+```
+
+**Mock values (hardcoded for Phase 3A):** TVOC=245 ppb, Temp=28.4 °C, Humidity=63 %
+
+---
+
+### ⬜ Phase 3B — Dashboard Data Binding
 **Status: NOT STARTED**
 
-**Goal:** Replace the empty stub with the full dashboard design: arc gauge for TVOC, sparkline mini-charts for temp/humidity, level badge, live numeric readings.
-
-**Design spec:**
-- Content area: 272×386 px (y=44 to y=430)
-- Arc gauge: `lv_arc`, 220×220 px, centred horizontally at ~y=80, range 0–1000 ppb, 300° sweep, colour = dynamic (green/amber/red)
-- Level badge: pill-shaped label below arc centre ("GOOD" / "WARNING" / "DANGER")
-- TVOC numeric: `IVF_FONT_HUGE` (48 px), below arc
-- Temp card: left half of lower area, sparkline (lv_chart, 30 points, line mode) + current °C value
-- Humidity card: right half of lower area, sparkline + current % value
-- Refresh: `screen_dashboard_update()` called at 1 Hz by `ui_refresh_task` in `app_main.c`
+**Goal:** Wire `screen_dashboard_update()` to live `sensor_manager` data so the dashboard reflects real (or simulated) sensor readings.
 
 **Files to modify:**
-- `main/ui/screens/screen_dashboard.c` — Full implementation
-- `main/ui/screens/screen_dashboard.h` — No change needed (API unchanged)
-
-**sdkconfig prerequisite:**
-- Verify `CONFIG_LV_USE_ARC=y` and `CONFIG_LV_USE_CHART=y` before starting
+- `main/ui/screens/screen_dashboard.c` — Implement `screen_dashboard_update()`:
+  1. Call `sensor_manager_get_data(&d)`
+  2. Update `s_lbl_tvoc_value` with `d.voc_ppb`
+  3. Update `s_lbl_level` badge colour + text based on `sensor_get_voc_level(d.voc_ppb)`
+  4. Update `s_lbl_temp_value` / `s_lbl_hum_value`
+  5. Push new chart points: `lv_chart_set_next_value(s_chart_temp, ser, (int16_t)(d.temperature_c * 10))`
+- `main/app_main.c` — Confirm `ui_refresh_task` calls `ui_dashboard_refresh()` at 1 Hz (already present)
 
 **Acceptance criteria:**
-- Arc angle updates live at 1 Hz matching simulated TVOC sine wave
-- Arc colour transitions green→amber→red at threshold crossings
-- Level badge text and colour matches arc colour
-- Temp and humidity sparklines scroll left as new readings arrive
+- Dashboard values update every 1 s matching `sensor_manager` simulation sine wave
+- Badge colour transitions green→yellow→orange→red at correct thresholds
+- Sparklines scroll left as new readings arrive
 - No LVGL heap assertion on sustained 1 Hz refresh
 
 ---
@@ -361,7 +431,7 @@ Replaced dark-theme 480×272 landscape navigation shell with light-theme 272×48
 | `main/ui/ui.h` | ✅ Phase 2 complete | Light theme, portrait constants, new screen IDs |
 | `main/ui/ui.c` | ✅ Phase 2 complete | Tab bar builder, header builder, fade navigation |
 | `main/ui/screens/screen_splash.c/.h` | ✅ Phase 2 complete | Portrait size fix |
-| `main/ui/screens/screen_dashboard.c/.h` | ⬜ Stub | Full content Phase 3 |
+| `main/ui/screens/screen_dashboard.c/.h` | ✅ Phase 3A frozen | Multi-zone arc 4 zones, pixel-exact scale labels, header with WiFi+SD card, 110px cards, 30pt sparklines, mock data. Phase 3B wires sensor_manager. |
 | `main/ui/screens/screen_chart.c/.h` | ⬜ Stub | Full content Phase 4 |
 | `main/ui/screens/screen_logs.c/.h` | ⬜ Stub | Full content Phase 5 |
 | `main/ui/screens/screen_settings.c/.h` | ⬜ Stub | Full content Phase 6 |
@@ -392,11 +462,11 @@ Replaced dark-theme 480×272 landscape navigation shell with light-theme 272×48
 
 2. **Touch calibration**: Raw ADC min/max values (`TOUCH_RAW_X_MIN=200`, `TOUCH_RAW_X_MAX=4000`, `TOUCH_RAW_Y_MIN=200`, `TOUCH_RAW_Y_MAX=3600`) are initial estimates. Fine-tune after Phase 2 flash by tapping all four corners and logging raw values.
 
-3. **sdkconfig verification needed before Phase 3**:
-   - `CONFIG_LV_USE_ARC=y` (Phase 3 — arc gauge)
-   - `CONFIG_LV_USE_CHART=y` (Phases 3+4 — sparklines, history chart)
-   - `CONFIG_LV_USE_TABLE=y` (Phase 5 — logs table)
-   - `CONFIG_LV_USE_SLIDER=y` (Phase 6 — brightness slider)
+3. **sdkconfig widget verification:**
+   - `CONFIG_LV_USE_ARC=y` ✅ confirmed — arc gauge builds and runs (Phase 3A)
+   - `CONFIG_LV_USE_CHART=y` ✅ confirmed — sparklines build and run (Phase 3A)
+   - `CONFIG_LV_USE_TABLE=y` ⬜ verify before Phase 5 — logs table
+   - `CONFIG_LV_USE_SLIDER=y` ⬜ verify before Phase 6 — brightness slider
 
 4. **app_main.c tight coupling**: `ui_refresh_task` calls `ui_dashboard_refresh()` directly across FreeRTOS tasks. This is safe for now (protected by `lvgl_port_lock`) but will be refactored to an event queue in Phase 5.
 
@@ -410,6 +480,9 @@ Replaced dark-theme 480×272 landscape navigation shell with light-theme 272×48
 |------|-------|--------|-------------|
 | 2026-06-17 | Phase 2 | ✅ 1373/1373, zero errors | 0x88A90 (553 KB, 47% free) |
 | 2026-06-17 | Phase 2.1 rotation fix | ✅ 1373/1373, zero errors | 0x88D00 (553 KB, 47% free) |
+| 2026-06-17 | Phase 3A (first build — 1 warning) | ✅ build OK, 1 warning (-Wunused-function `tvoc_to_angle`) | 0xAD980 (689 KB, 32% free) |
+| 2026-06-18 | Phase 3A (corrected — 4 zones, no indicator arc) | ✅ 1373/1373, zero errors, zero warnings | 0xA84A0 (689 KB, 34% free) |
+| 2026-06-18 | Phase 3A visual refinement + freeze (header layout, gauge shift, label abs coords, card resize) | ✅ zero errors, zero warnings | 0xA8500 (34% free) |
 
 ---
 

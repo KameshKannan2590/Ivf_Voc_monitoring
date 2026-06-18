@@ -121,14 +121,14 @@ Ivf_Voc_monitoring/
     │
     ├── display/
     │   ├── display_driver.h        ← GPIO defs, timing constants, API
-    │   └── display_driver.c        ← esp_lcd_panel_rgb init + backlight
+    │   └── display_driver.c        ← esp_lcd_panel_rgb init + backlight + hardware portrait rotation
     │
     ├── touch/
     │   ├── touch_driver.h          ← SPI pin defs, calibration constants, API
     │   └── touch_driver.c          ← SPI2 bus + XPT2046 init via esp_lcd_touch
     │
     ├── lvgl_port/
-    │   ├── lv_conf.h               ← LVGL 8.3 config (fonts, widgets, tick source)
+    │   ├── lv_conf.h               ← LVGL 8.4 config (fonts, widgets, tick source)
     │   ├── lvgl_port.h             ← lvgl_port_init / lock / unlock API
     │   └── lvgl_port.c             ← LVGL task (core 1), flush_cb, touch_read_cb
     │
@@ -137,7 +137,7 @@ Ivf_Voc_monitoring/
     │   ├── ui.c                    ← Screen manager, shared styles, navigation
     │   └── screens/
     │       ├── screen_splash.h/.c       ← Boot logo + progress bar → auto-advance (complete)
-    │       ├── screen_dashboard.h/.c    ← STUB — Phase 3 (arc gauge, sparklines, readings)
+    │       ├── screen_dashboard.h/.c    ← Phase 3A frozen — multi-zone arc, pixel-exact labels, 110px cards
     │       ├── screen_chart.h/.c        ← STUB — Phase 4 (lv_chart TVOC history)
     │       ├── screen_logs.h/.c         ← STUB — Phase 5 (lv_table data log)
     │       └── screen_settings.h/.c     ← STUB — Phase 6 (brightness slider, thresholds)
@@ -319,90 +319,115 @@ Thresholds loaded from NVS on boot; defaults:
 
 ## 5. Screen Flow & UI
 
+Navigation model: 4-tab bar (Home / Chart / Logs / Settings). All screens exist simultaneously in memory; navigation is a `lv_scr_load_anim(FADE_IN, 200 ms)` call. No back-button model.
+
 ```
 ┌─────────┐  auto (~2.4 s)   ┌───────────┐
-│  Splash  ├─────────────────►│ Dashboard │◄─────────┐
-└─────────┘                  └─────┬─────┘          │
-                                   │ touch           │
-                    ┌──────────────┼──────────────┐  │
-                    ▼              ▼              ▼  │
-              ┌──────────┐  ┌────────┐  ┌──────────┐│
-              │VOC Detail│  │ Alarms │  │ Settings ││
-              └────┬─────┘  └───┬────┘  └────┬─────┘│
-                   │ back       │ back        │ back  │
-                   └────────────┴────────────►───────┘
+│  Splash  ├─────────────────►│ Dashboard │
+└─────────┘                  └─────┬─────┘
+                                   │ tab bar
+                    ┌──────────────┼──────────────┐
+                    ▼              ▼              ▼
+              ┌──────────┐  ┌────────┐  ┌──────────┐
+              │  Chart   │  │  Logs  │  │ Settings │
+              └──────────┘  └────────┘  └──────────┘
+         (Phase 4 stub)  (Phase 5 stub)  (Phase 6 stub)
 ```
 
-### Screen: Splash (480 × 272)
+### Screen: Splash (272 × 480 portrait)
 ```
-┌────────────────────────────────────────────────┐
-│                                                │
-│         IVF VOC Monitor                       │
-│   Environmental Monitoring System             │
-│   ────────────────────                        │
-│         ████████████░░░░░  75%                │
-│         Loading configuration...              │
-│                                      v1.0.0   │
-└────────────────────────────────────────────────┘
-```
-
-### Screen: Dashboard (480 × 272)
-```
-┌─ Status bar (28px) ─────────────────── time ──┐
-│  IVF VOC Monitor     ⚠ 1      --:--:--        │
-├───────────────────────────┬───────────────────┤
-│  VOC LEVEL                │  TEMPERATURE      │
-│  ┌─────────────────────┐  │  22.5 °C          │
-│  │       125           │  ├───────────────────┤
-│  │       ppb           │  │  HUMIDITY         │
-│  │     ● GOOD          │  │  48 %             │
-│  └─────────────────────┘  ├───────────────────┤
-│                           │  CO₂              │
-│                           │  450 ppm          │
-├─ Nav bar (42px) ──────────────────────────────┤
-│  👁 DETAIL    ⚠ ALARMS    ⚙ SETTINGS          │
-└────────────────────────────────────────────────┘
+┌────────────────────────┐  ← 272 px wide
+│                        │
+│    IVF VOC Monitor     │
+│  Environmental Monitor │
+│   ──────────────────   │
+│   ████████████░░░░░    │  progress bar
+│   Loading sensors...   │
+│                 v1.0.0 │
+└────────────────────────┘
 ```
 
-### Screen: VOC Detail (480 × 272)
+### Screen: Dashboard (272 × 480 portrait) — Phase 3A frozen
+
 ```
-┌─ ← back ─── VOC Detail ───────────────────────┐
-│  125 ppb  ● GOOD                               │
-│  ┌──────────────────────────────────────────┐  │
-│  │  Trend Chart — last 60 seconds (1Hz)     │  │
-│  │  ~~~~^~~~~~~~~~~~~~~~~~~~~~              │  │
-│  │                              ── WARN     │  │
-│  └──────────────────────────────────────────┘  │
-│  MIN            AVG              MAX            │
-│  98 ppb        124 ppb          185 ppb         │
-└────────────────────────────────────────────────┘
+┌── Header 272×44 ─────────────────────────┐
+│ ● AIR QUALITY MONITOR       ≋  📁         │  leaf dot + small title left; WiFi+SD right
+│                          08:25 AM        │  time y=18, date y=30 (TOP_RIGHT)
+│                        May 24, 2025      │
+├── Content 272×386 ────────────────────────┤
+│          TVOC (ppb)  ← y=4               │
+│    500                                   │  ← pixel-exact label at (136, 40)
+│    ╔══════════════════════════╗           │
+│ 250║ ●green ●yel ●org ●red   ║ 750       │  210×210 arc, width 18px, ARC_CY=160
+│    ║        245               ║           │  gauge centre: flex stack at (71,103)
+│    ║         ppb              ║           │
+│    ║     ╔ GOOD ✓ ╗           ║           │
+│    ╚══════════════════════════╝           │
+│  0                              1000     │  ← pixel-exact at (48,245) and (220,245)
+│ ┌──────────────┐  ┌──────────────────┐   │
+│ │ 🌡 TEMP      │  │ 💧 HUMIDITY      │   │  124×110 each, CARD_Y=255
+│ │ 28.4 °C     │  │ 63 %             │   │
+│ │ ∿∿∿∿∿∿∿∿∿∿∿ │  │ ∿∿∿∿∿∿∿∿∿∿∿∿∿∿  │   │  30-point sparkline 36px, no dots
+│ └──────────────┘  └──────────────────┘   │
+├── Tab bar 272×50 ─────────────────────────┤
+│  🏠 Home   📈 Chart  📋 Logs  ⚙ Cfg      │
+└───────────────────────────────────────────┘
 ```
 
-### Screen: Alarms (480 × 272)
-```
-┌─ ← back ─── Alarms ───────────────────────────┐
-│  ● VOC HIGH  520.0 / 500.0  00:14:25           │
-│  ─ TEMP HIGH  28.5 / 28.0   00:13:10 (acked)  │
-│  ─ (no more alarms)                            │
-│                                                │
-├─ ✔ ACK ALL ──────────── 🗑 CLEAR ─────────────┤
-└────────────────────────────────────────────────┘
+**Arc gauge geometry (frozen):**
+| Constant | Value |
+|----------|-------|
+| `ARC_SIZE` | 210 px |
+| `ARC_WIDTH` | 18 px |
+| `ARC_CX / ARC_CY` | 136 / 160 (content-relative) |
+| `ARC_TOP_X / ARC_TOP_Y` | 31 / 55 |
+
+**Arc gauge zones:**
+| Zone | ppb range | Angle | Colour |
+|------|-----------|-------|--------|
+| Green | 0 – 250 | 135° → 202° | `#43A047` |
+| Yellow | 250 – 500 | 202° → 270° | `#FDD835` |
+| Orange | 500 – 750 | 270° → 338° | `#FB8C00` |
+| Red | 750 – 1000 | 338° → 45° | `#E53935` |
+
+Scale labels: 0, 250, 500, 750, 1000 — **pixel-exact absolute positions** via `make_scale_label_abs(content, text, x, y)`.  
+Positions tuned on device (no runtime `cosf/sinf`). Centres: (48,245), (20,125), (136,40), (253,125), (220,245).  
+All zone arcs always fully visible (static). Value shown by centre label only — no moving indicator arm.  
+`DASH_COLOR_YELLOW = #FDD835` defined locally in `screen_dashboard.c` (not in `ui.h`).
+
+**Dashboard API (screen_dashboard.h):**
+```c
+lv_obj_t *screen_dashboard_create(void);
+void      screen_dashboard_update(void);      /* Phase 3B: wire sensor_manager */
+void dashboard_set_time(const char *time_str); /* e.g. "08:25 AM" */
+void dashboard_set_date(const char *date_str); /* e.g. "May 24, 2025" */
 ```
 
-### Screen: Settings (480 × 272)
+### Screen: Chart (272 × 480 portrait) — Phase 4 stub
 ```
-┌─ ← back ─── Settings ─────────────────────────┐
-│  VOC Thresholds                                │
-│  VOC Warning (ppb)       [─] [ 300 ] [+]       │
-│  VOC Alarm (ppb)         [─] [ 500 ] [+]       │
-│  Temperature Thresholds                        │
-│  Temp Warning (°C)       [─] [  26 ] [+]       │
-│  Temp Alarm (°C)         [─] [  28 ] [+]       │
-│  Humidity Thresholds                           │
-│  Humidity Low (%)        [─] [  35 ] [+]       │
-│  Humidity High (%)       [─] [  65 ] [+]       │
-├─ 💾 SAVE ──────────────────────── ✔ Saved ────┤
-└────────────────────────────────────────────────┘
+┌── Header ──────────────────┐
+│      TVOC HISTORY          │
+├── Content (stub) ──────────┤
+│  [empty — Phase 4]         │
+├── Tab bar ─────────────────┤
+```
+
+### Screen: Logs (272 × 480 portrait) — Phase 5 stub
+```
+┌── Header ──────────────────┐
+│       DATA LOGS            │
+├── Content (stub) ──────────┤
+│  [empty — Phase 5]         │
+├── Tab bar ─────────────────┤
+```
+
+### Screen: Settings (272 × 480 portrait) — Phase 6 stub
+```
+┌── Header ──────────────────┐
+│        SETTINGS            │
+├── Content (stub) ──────────┤
+│  [empty — Phase 6]         │
+├── Tab bar ─────────────────┤
 ```
 
 ---
@@ -538,7 +563,7 @@ Remove-Item -Recurse -Force build
 | 11 | NVS thresholds | ✅ Complete | Load on boot from `ivf_cfg`; save from Settings (Phase 6) |
 | 12 | Screen: Splash | ✅ Complete | Progress bar, 6-step timer, auto-advance to Dashboard |
 | 13 | UI framework | ✅ Complete | Light theme, header/tab-bar builders, fade navigation, screen registry |
-| 14 | Screen: Dashboard | ⬜ Stub | Phase 3 — arc gauge, sparklines, readings not yet implemented |
+| 14 | Screen: Dashboard (Phase 3A) | ✅ Frozen | Multi-zone arc (4 zones, ARC_CY=160, width 18px), pixel-exact scale labels, header with leaf+title(small)+WiFi+SD card+time+date, 124×110 cards, 30pt sparklines, level badge. **Mock data hardcoded.** Phase 3B wires `sensor_manager`. |
 | 15 | Screen: Chart | ⬜ Stub | Phase 4 — TVOC history chart not yet implemented |
 | 16 | Screen: Logs | ⬜ Stub | Phase 5 — data log table not yet implemented |
 | 17 | Screen: Settings | ⬜ Stub | Phase 6 — brightness/threshold controls not yet implemented |
@@ -605,9 +630,12 @@ The mapping is applied in `touch_driver.c`:`touch_driver_read()` — edit the li
 
 ### HIGH PRIORITY — Before production
 
-#### 9.4 Add real-time clock (RTC) to status bar
-**File:** `main/ui/screens/screen_dashboard.c`, `s_lbl_time`  
-Currently shows `"--:--:--"`. Options:
+#### 9.4 Wire real-time clock (RTC) into dashboard time/date labels
+**File:** `main/ui/screens/screen_dashboard.c`  
+Phase 3A added `s_lbl_time` and `s_lbl_date` to the header with mock values `"08:25 AM"` / `"May 24, 2025"`.  
+Public API is ready: `dashboard_set_time(str)` and `dashboard_set_date(str)`.  
+To wire a real clock: call these two functions from the 1 Hz `ui_refresh_task` in `app_main.c`.  
+RTC source options:
 - **PCF8563** external I2C RTC (best for medical device, keeps time on power loss)
 - `esp_sntp` over Wi-Fi if network connectivity is added
 - `esp_timer_get_time()` relative time (seconds since boot) as a fallback
@@ -634,10 +662,14 @@ alarm_manager_reload_thresholds();    // implement this function
 The alarm ring buffer lives in RAM — all history is lost on power cycle.  
 Implement NVS serialization in `alarm_manager_init()` (load) and `push_alarm()` (save).
 
-#### 9.8 Dashboard status bar time update
-**File:** `main/ui/screens/screen_dashboard.c`  
-`s_lbl_time` widget exists but is updated with `"--:--:--"` only. Add a 1-second LVGL timer
-inside `screen_dashboard_create()` that calls `snprintf` with the RTC/SNTP time.
+#### 9.8 Phase 3B — Wire sensor_manager into dashboard_update()
+**File:** `main/ui/screens/screen_dashboard.c` → `screen_dashboard_update()`  
+Phase 3A hardcodes TVOC=245, Temp=28.4 °C, Hum=63%. Phase 3B must:
+1. Call `sensor_manager_get_data(&d)` inside `screen_dashboard_update()`
+2. Update `s_lbl_tvoc_value` with the live ppb value
+3. Update `s_lbl_level` badge colour and text based on `sensor_get_voc_level(d.voc_ppb)`
+4. Update `s_lbl_temp_value` and `s_lbl_hum_value` with live readings
+5. Push new data points into `s_chart_temp` and `s_chart_hum` series
 
 ---
 
