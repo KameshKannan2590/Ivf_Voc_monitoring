@@ -23,8 +23,8 @@ extern "C" {
 #define IVF_COLOR_WARNING       lv_color_hex(0xFB8C00)
 #define IVF_COLOR_DANGER        lv_color_hex(0xE53935)
 #define IVF_COLOR_NAV           lv_color_hex(0xF8F9FA)
-#define IVF_COLOR_TAB_ACTIVE    lv_color_hex(0x1A73E8)
-#define IVF_COLOR_TAB_INACTIVE  lv_color_hex(0x9E9E9E)
+#define IVF_COLOR_NAV_ACTIVE    lv_color_hex(0xE8F0FE)
+#define IVF_COLOR_NAV_INACTIVE  lv_color_hex(0x9E9E9E)
 
 /* Typography (montserrat sizes already enabled in sdkconfig) */
 #define IVF_FONT_SMALL   (&lv_font_montserrat_12)
@@ -35,13 +35,14 @@ extern "C" {
 #define IVF_FONT_HUGE    (&lv_font_montserrat_48)
 
 /* Portrait layout constants */
-#define IVF_SCREEN_W    272
-#define IVF_SCREEN_H    480
-#define IVF_HEADER_H     50
-#define IVF_TAB_H        50
-#define IVF_CONTENT_H   (IVF_SCREEN_H - IVF_HEADER_H - IVF_TAB_H)  /* 386 */
-#define IVF_CARD_RADIUS   8
-#define IVF_PAD           8
+#define IVF_SCREEN_W      272
+#define IVF_SCREEN_H      480
+#define IVF_HEADER_H       50
+#define IVF_CONTENT_H     (IVF_SCREEN_H - IVF_HEADER_H)  /* 430 */
+#define IVF_DRAWER_W      200
+#define IVF_NAV_BTN_SIZE   44
+#define IVF_CARD_RADIUS     8
+#define IVF_PAD             8
 
 /* Screen IDs */
 typedef enum {
@@ -53,9 +54,8 @@ typedef enum {
     SCREEN_COUNT
 } screen_id_t;
 
-/* Shared builders — call from each screen's _create() */
+/* Shared builder — call from each screen's _create() */
 lv_obj_t *ui_build_header(lv_obj_t *parent, const char *title);
-void      ui_build_tab_bar(lv_obj_t *parent, screen_id_t active_tab);
 
 /**
  * Initialize the UI (call after lvgl_port_init).
@@ -71,10 +71,11 @@ void ui_init(void);
 void ui_goto_screen(screen_id_t target, bool forward);
 
 /**
- * Refresh data on the dashboard (called each sensor tick).
- * Safe to call from non-LVGL task; acquires lvgl_port_lock internally.
+ * Toggle the navigation drawer open/closed.
+ * Called from the header menu button callback — screens never touch the
+ * navigation_drawer_t handle directly; all navigation state lives in ui.c.
  */
-void ui_dashboard_refresh(void);
+void ui_nav_drawer_toggle(void);
 
 #ifdef __cplusplus
 }

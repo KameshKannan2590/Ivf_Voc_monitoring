@@ -14,18 +14,6 @@
 
 static const char *TAG = "main";
 
-/* ── UI refresh task: feeds new sensor readings into the dashboard ── */
-static void ui_refresh_task(void *arg)
-{
-    /* Give LVGL a moment to finish drawing the splash screen */
-    vTaskDelay(pdMS_TO_TICKS(500));
-
-    while (1) {
-        ui_dashboard_refresh();
-        vTaskDelay(pdMS_TO_TICKS(1000));   /* 1 Hz UI update */
-    }
-}
-
 void app_main(void)
 {
     ESP_LOGI(TAG, "========================================");
@@ -62,9 +50,6 @@ void app_main(void)
 
     /* ── UI (builds all screens, starts splash animation) ── */
     ui_init();
-
-    /* ── Background task to push sensor data to the dashboard ── */
-    xTaskCreate(ui_refresh_task, "ui_refresh", 4096, NULL, 2, NULL);
 
     ESP_LOGI(TAG, "System running");
 

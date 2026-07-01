@@ -19,7 +19,6 @@ lv_obj_t *screen_logs_create(void)
     lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
 
     ui_build_header(s_scr, "DATA LOGS");
-    ui_build_tab_bar(s_scr, SCREEN_LOGS);
 
     /* Content area — Phase 5 adds lv_table with columns:
        Time / TVOC (ppb) / Temp (°C) / Humidity (%) / Status */

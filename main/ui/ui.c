@@ -1,4 +1,6 @@
 #include "ui.h"
+#include "assets.h"
+#include "components/navigation_drawer/navigation_drawer.h"
 #include "lvgl_port/lvgl_port.h"
 
 #include "screens/screen_splash.h"
@@ -8,17 +10,38 @@
 #include "screens/screen_settings.h"
 
 #include "esp_log.h"
+#include "esp_timer.h"
 #include <stdint.h>
+#include <stdio.h>
 
 static const char *TAG = "ui";
 
-static lv_obj_t   *s_screens[SCREEN_COUNT];
-static screen_id_t s_current = SCREEN_SPLASH;
+static lv_obj_t            *s_screens[SCREEN_COUNT];
+static screen_id_t          s_current    = SCREEN_SPLASH;
+static navigation_drawer_t *s_nav_drawer = NULL;
+static lv_timer_t          *s_dash_timer = NULL;
 
 static lv_style_t s_style_screen;
 static lv_style_t s_style_card;
 static lv_style_t s_style_label_primary;
 static lv_style_t s_style_label_muted;
+
+/* ── Navigation drawer items ──────────────────────────────────── */
+
+static const nav_drawer_item_t APP_NAV_ITEMS[] = {
+    { NULL, "Dashboard",  SCREEN_DASHBOARD, &material_symbols_dashboard_rounded },
+    { NULL, "TVOC Chart", SCREEN_CHART,     &solar_chart_bold_duotone           },
+    { NULL, "Data Logs",  SCREEN_LOGS,      &icon_park_solid_log                },
+    { NULL, "Settings",   SCREEN_SETTINGS,  &ant_design_setting_filled          },
+};
+
+static void on_nav_item_selected(uint8_t id, void *user_data)
+{
+    (void)user_data;
+    ui_goto_screen((screen_id_t)id, true);
+}
+
+/* ── Shared styles ────────────────────────────────────────────── */
 
 static void build_shared_styles(void)
 {
@@ -45,14 +68,7 @@ static void build_shared_styles(void)
     lv_style_set_text_font(&s_style_label_muted, IVF_FONT_SMALL);
 }
 
-/* ── Shared UI builders ─────────────────────────────────────── */
-
-static void tab_btn_event_cb(lv_event_t *e)
-{
-    lv_obj_t *cell = lv_event_get_target(e);
-    screen_id_t target = (screen_id_t)(uintptr_t)lv_obj_get_user_data(cell);
-    ui_goto_screen(target, true);
-}
+/* ── Shared UI builders ─────────────────────────────────────────── */
 
 lv_obj_t *ui_build_header(lv_obj_t *parent, const char *title)
 {
@@ -77,73 +93,29 @@ lv_obj_t *ui_build_header(lv_obj_t *parent, const char *title)
     return hdr;
 }
 
-void ui_build_tab_bar(lv_obj_t *parent, screen_id_t active_tab)
+/* ── Dashboard refresh timer (runs inside lv_timer_handler — no mutex needed) */
+
+static void dash_timer_cb(lv_timer_t *t)
 {
-    static const struct {
-        const char *sym;
-        const char *lbl;
-        screen_id_t id;
-    } TABS[4] = {
-        { LV_SYMBOL_HOME,     "Home",     SCREEN_DASHBOARD },
-        { LV_SYMBOL_LIST,     "Chart",    SCREEN_CHART     },
-        { LV_SYMBOL_FILE,     "Logs",     SCREEN_LOGS      },
-        { LV_SYMBOL_SETTINGS, "Settings", SCREEN_SETTINGS  },
-    };
+    (void)t;
 
-    lv_obj_t *bar = lv_obj_create(parent);
-    lv_obj_set_size(bar, IVF_SCREEN_W, IVF_TAB_H);
-    lv_obj_align(bar, LV_ALIGN_BOTTOM_MID, 0, 0);
-    lv_obj_set_style_bg_color(bar, IVF_COLOR_NAV, 0);
-    lv_obj_set_style_bg_opa(bar, LV_OPA_COVER, 0);
-    lv_obj_set_style_radius(bar, 0, 0);
-    lv_obj_set_style_pad_all(bar, 0, 0);
-    lv_obj_set_style_pad_column(bar, 0, 0);
-    lv_obj_set_style_border_width(bar, 1, 0);
-    lv_obj_set_style_border_side(bar, LV_BORDER_SIDE_TOP, 0);
-    lv_obj_set_style_border_color(bar, IVF_COLOR_BORDER, 0);
-    lv_obj_clear_flag(bar, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_set_layout(bar, LV_LAYOUT_FLEX);
-    lv_obj_set_flex_flow(bar, LV_FLEX_FLOW_ROW);
-    lv_obj_set_flex_align(bar, LV_FLEX_ALIGN_SPACE_EVENLY,
-                           LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    screen_dashboard_update();
 
-    for (int i = 0; i < 4; i++) {
-        bool active = (TABS[i].id == active_tab);
-        lv_color_t col = active ? IVF_COLOR_TAB_ACTIVE : IVF_COLOR_TAB_INACTIVE;
+    /* Elapsed-time clock (boot-relative until RTC/SNTP is wired up) */
+    int64_t us   = esp_timer_get_time();
+    int32_t secs = (int32_t)(us / 1000000LL);
+    int32_t h    = (secs / 3600) % 24;
+    int32_t m    = (secs / 60) % 60;
 
-        lv_obj_t *cell = lv_obj_create(bar);
-        lv_obj_set_size(cell, 68, IVF_TAB_H);
-        lv_obj_set_style_bg_color(cell, IVF_COLOR_NAV, 0);
-        lv_obj_set_style_bg_opa(cell, LV_OPA_COVER, 0);
-        lv_obj_set_style_radius(cell, 0, 0);
-        lv_obj_set_style_pad_all(cell, 0, 0);
-        lv_obj_set_style_pad_row(cell, 2, 0);     /* gap between icon and label */
-        lv_obj_set_style_border_width(cell, active ? 3 : 0, 0);
-        lv_obj_set_style_border_side(cell, LV_BORDER_SIDE_TOP, 0);
-        lv_obj_set_style_border_color(cell, IVF_COLOR_TAB_ACTIVE, 0);
-        lv_obj_clear_flag(cell, LV_OBJ_FLAG_SCROLLABLE);
-        lv_obj_add_flag(cell, LV_OBJ_FLAG_CLICKABLE);
-        lv_obj_set_layout(cell, LV_LAYOUT_FLEX);
-        lv_obj_set_flex_flow(cell, LV_FLEX_FLOW_COLUMN);
-        lv_obj_set_flex_align(cell, LV_FLEX_ALIGN_CENTER,
-                              LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
-
-        lv_obj_t *sym_lbl = lv_label_create(cell);
-        lv_label_set_text(sym_lbl, TABS[i].sym);
-        lv_obj_set_style_text_color(sym_lbl, col, 0);
-        lv_obj_set_style_text_font(sym_lbl, IVF_FONT_NORMAL, 0);
-
-        lv_obj_t *txt_lbl = lv_label_create(cell);
-        lv_label_set_text(txt_lbl, TABS[i].lbl);
-        lv_obj_set_style_text_color(txt_lbl, col, 0);
-        lv_obj_set_style_text_font(txt_lbl, IVF_FONT_SMALL, 0);
-
-        lv_obj_set_user_data(cell, (void *)(uintptr_t)TABS[i].id);
-        lv_obj_add_event_cb(cell, tab_btn_event_cb, LV_EVENT_CLICKED, NULL);
-    }
+    char time_buf[12];
+    int32_t h12 = h % 12;
+    if (h12 == 0) h12 = 12;
+    snprintf(time_buf, sizeof(time_buf), "%02"PRId32":%02"PRId32" %s",
+             h12, m, h >= 12 ? "PM" : "AM");
+    dashboard_set_time(time_buf);
 }
 
-/* ── Navigation ─────────────────────────────────────────────── */
+/* ── Navigation ─────────────────────────────────────────────────── */
 
 void ui_init(void)
 {
@@ -163,6 +135,23 @@ void ui_init(void)
     s_current = SCREEN_SPLASH;
     screen_splash_start();
 
+    nav_drawer_cfg_t nav_cfg = {
+        .items          = APP_NAV_ITEMS,
+        .item_count     = 4,
+        .drawer_width   = IVF_DRAWER_W,
+        .on_navigate    = on_nav_item_selected,
+        .user_data      = NULL,
+        .create_fab     = false,
+        .header_title   = "Environmental Monitor",
+        .header_status  = "Normal",
+        .footer_version = "Version v1.2.0",
+    };
+    s_nav_drawer = navigation_drawer_create(&nav_cfg);
+    navigation_drawer_set_active(s_nav_drawer, SCREEN_DASHBOARD);
+
+    /* 1 Hz sensor + clock refresh — fires inside lv_timer_handler, no mutex needed */
+    s_dash_timer = lv_timer_create(dash_timer_cb, 1000, NULL);
+
     lvgl_port_unlock();
 
     ESP_LOGI(TAG, "UI ready");
@@ -173,7 +162,9 @@ void ui_goto_screen(screen_id_t target, bool forward)
     (void)forward;
     if (target >= SCREEN_COUNT) return;
 
-    lv_scr_load_anim(s_screens[target], LV_SCR_LOAD_ANIM_FADE_IN, 200, 0, false);
+    navigation_drawer_close(s_nav_drawer);
+    navigation_drawer_set_active(s_nav_drawer, target);
+    lv_scr_load_anim(s_screens[target], LV_SCR_LOAD_ANIM_NONE, 0, 0, false);
     s_current = target;
 
     if (target == SCREEN_CHART) screen_chart_refresh();
@@ -182,10 +173,8 @@ void ui_goto_screen(screen_id_t target, bool forward)
     ESP_LOGD(TAG, "-> screen %d", target);
 }
 
-void ui_dashboard_refresh(void)
+void ui_nav_drawer_toggle(void)
 {
-    if (lvgl_port_lock(50)) {
-        screen_dashboard_update();
-        lvgl_port_unlock();
-    }
+    navigation_drawer_toggle(s_nav_drawer);
 }
+

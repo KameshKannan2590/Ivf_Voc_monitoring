@@ -5,6 +5,7 @@ idf_component_register(
         "touch/touch_driver.c"
         "lvgl_port/lvgl_port.c"
         "ui/ui.c"
+        # "ui/nav_drawer.c"          # Phase 4B legacy — removed Phase 4.2.5 (superseded by navigation_drawer)
         "ui/screens/screen_splash.c"
         "ui/screens/screen_dashboard.c"
         "ui/screens/screen_chart.c"
@@ -15,6 +16,25 @@ idf_component_register(
         "sensors/sensor_backend_sim.c"      # simulation: comment out for real HW
         # "sensors/sensor_backend_hw.c"     # real HW:   uncomment for Phase 7
         "data/alarm_manager.c"
+        # ── Phase 4.1 — Shared UI components ──────────────────────────────────
+        "ui/assets/assets.c"
+        "ui/assets/menu_burger_horizontal_bold.c"
+        "ui/assets/temperature.c"
+        "ui/assets/humidity.c"
+        "ui/assets/sd_Card.c"
+        "ui/assets/dashboard_icon.c"
+        "ui/assets/chart_icon.c"
+        "ui/assets/data_log_icon.c"
+        "ui/assets/setting_icon.c"
+        "ui/assets/shield_icon.c"
+        "ui/assets/wifi_icon.c"
+        "ui/components/status_badge/status_badge.c"
+        "ui/components/icon_button/icon_button.c"
+        "ui/components/card/card.c"
+        "ui/components/circular_gauge/circular_gauge.c"
+        "ui/components/header/header.c"
+        "ui/components/navigation_drawer/navigation_drawer.c"
+        "ui/components/voc_gauge/voc_gauge.c"
 
     INCLUDE_DIRS
         "."
@@ -22,6 +42,14 @@ idf_component_register(
         "touch"
         "lvgl_port"
         "ui"
+        "ui/assets"
+        "ui/components/status_badge"
+        "ui/components/icon_button"
+        "ui/components/card"
+        "ui/components/circular_gauge"
+        "ui/components/header"
+        "ui/components/navigation_drawer"
+        "ui/components/voc_gauge"
         "sensors"
         "data"
 

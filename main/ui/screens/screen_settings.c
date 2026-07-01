@@ -19,7 +19,6 @@ lv_obj_t *screen_settings_create(void)
     lv_obj_clear_flag(s_scr, LV_OBJ_FLAG_SCROLLABLE);
 
     ui_build_header(s_scr, "SETTINGS");
-    ui_build_tab_bar(s_scr, SCREEN_SETTINGS);
 
     /* Content area — Phase 6 adds:
        - Brightness slider (PWM backlight)

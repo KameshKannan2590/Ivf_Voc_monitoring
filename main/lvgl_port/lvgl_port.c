@@ -50,8 +50,10 @@ static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
 
     uint16_t x = 0, y = 0;
     if (touch_driver_read(tp, &x, &y)) {
-        data->point.x = (lv_coord_t)x;
-        data->point.y = (lv_coord_t)y;
+        /* touch_driver_read: *x = portrait_Y (0-479), *y = portrait_X (0-271).
+         * LVGL ROT_NONE 272x480 expects point.x = portrait_X, point.y = portrait_Y. */
+        data->point.x = (lv_coord_t)y;
+        data->point.y = (lv_coord_t)x;
         data->state   = LV_INDEV_STATE_PRESSED;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
