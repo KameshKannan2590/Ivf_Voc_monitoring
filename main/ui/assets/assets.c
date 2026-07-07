@@ -2,14 +2,18 @@
 #include "ui.h"        /* IVF_COLOR_* constants */
 
 /* =======================================================================
- * assets.c — Drawn icon implementations
+ * assets.c — Icon implementations
  *
- * All icons are geometric LVGL primitives.  Each fits a 20×20 px bbox
- * unless the docstring says otherwise.
- *
- * Migration path: when real bitmap assets are delivered, replace the body
- * of each function with lv_img_create() + lv_img_set_src() while keeping
- * the function signature identical.  Calling code needs zero changes.
+ * Two kinds of icon live here, behind the same assets_draw_*() signature:
+ *   - Geometric LVGL primitives (leaf, wifi, clock, chart_icon, shield) —
+ *     built from make_icon_cont()/make_filled_rect() below, ~20×20 px bbox.
+ *   - Real bitmaps (thermometer/humidity/sd_card since Phase 4.1; calendar/
+ *     date_range/chart_average/chart_max/chart_min since Phase 5.4.1) —
+ *     lv_img_create() + lv_img_set_src() against an LV_IMG_DECLARE'd C
+ *     array (see assets.h), recoloured via
+ *     lv_obj_set_style_img_recolor(..., LV_OPA_COVER).
+ * Callers never need to know which kind a given icon is — the function
+ * signature and behaviour (draws at (x,y), tinted by `color`) is identical.
  * ======================================================================= */
 
 /* ── Internal helper: transparent, non-scrollable, non-clickable container */
@@ -179,4 +183,59 @@ void assets_draw_shield(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t
     make_filled_rect(cont,  7, 24, 14,  5, 0, color);
     make_filled_rect(cont, 11, 28,  6,  3, 0, color);
     make_filled_rect(cont, 13, 30,  2,  2, 0, color);
+}
+
+/* ── Calendar icon (24×24 px) — real bitmap: lets-icons:date-range-fill ── */
+
+void assets_draw_calendar(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+{
+    lv_obj_t *img = lv_img_create(parent);
+    lv_img_set_src(img, &lets_icons_date_range_fill);
+    lv_obj_set_pos(img, x, y);
+    lv_obj_set_style_img_recolor(img, color, 0);
+    lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+}
+
+/* ── Date-range icon (16×16 px) — real bitmap: ic:outline-date-range ──── */
+
+void assets_draw_date_range(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+{
+    lv_obj_t *img = lv_img_create(parent);
+    lv_img_set_src(img, &ic_outline_date_range);
+    lv_obj_set_pos(img, x, y);
+    lv_obj_set_style_img_recolor(img, color, 0);
+    lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+}
+
+/* ── Chart-average icon (16×16 px) — real bitmap: carbon:chart-average ── */
+
+void assets_draw_chart_average(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+{
+    lv_obj_t *img = lv_img_create(parent);
+    lv_img_set_src(img, &carbon_chart_average);
+    lv_obj_set_pos(img, x, y);
+    lv_obj_set_style_img_recolor(img, color, 0);
+    lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+}
+
+/* ── Chart-max icon (16×16 px) — real bitmap: tdesign:chart-maximum ───── */
+
+void assets_draw_chart_max(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+{
+    lv_obj_t *img = lv_img_create(parent);
+    lv_img_set_src(img, &tdesign_chart_maximum);
+    lv_obj_set_pos(img, x, y);
+    lv_obj_set_style_img_recolor(img, color, 0);
+    lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+}
+
+/* ── Chart-min icon (16×16 px) — real bitmap: tdesign:chart-minimum ───── */
+
+void assets_draw_chart_min(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+{
+    lv_obj_t *img = lv_img_create(parent);
+    lv_img_set_src(img, &tdesign_chart_minimum);
+    lv_obj_set_pos(img, x, y);
+    lv_obj_set_style_img_recolor(img, color, 0);
+    lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
 }

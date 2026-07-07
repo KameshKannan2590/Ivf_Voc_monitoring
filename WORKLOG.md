@@ -3,7 +3,7 @@
 **Device:** CrowPanel DIS06043H v2.1 (ESP32-S3 N4R2, 480×272 RGB565)  
 **Stack:** ESP-IDF 5.3.1 · LVGL 8.4.0 (managed component)  
 **UI orientation:** Portrait 272×480 (hardware rotation via RGB panel SWAP_XY + MIRROR_Y)  
-**Last updated:** 2026-06-30 · Phase 4.2.7 (UI Freeze Fix) complete · Dashboard FROZEN · UI freeze resolved
+**Last updated:** 2026-07-06 · **Chart screen FROZEN** · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.1 (Chart UI Migration) complete · Phase 4.2.7 (UI Freeze Fix) complete · Dashboard FROZEN · UI freeze resolved
 
 ---
 
@@ -744,74 +744,581 @@ Both tasks ran at the same FreeRTOS priority and competed for the LVGL mutex. LV
 
 ---
 
-### ⬜ Phase 4C — History Manager
-**Status: PLANNED**
+### ✅ Phase 5.1 — Chart UI Migration
+**Status: COMPLETE**
 
-**Goal:** Create `history_manager.c` — pure data module that aggregates 1 Hz TVOC samples into hourly and daily ring buffers. No LVGL dependency.
+**Goal:** Migrate `screen_chart.c` to the approved Figma design — UI/styling only. No architecture
+change: `apply_period()`/`period_cb()` logic, `screen_chart_refresh()`, and the eventual
+`history_manager` integration points are untouched.
 
-**Data model:**
-| View | Resolution | Max points |
-|------|-----------|------------|
-| 7D | Hourly avg | 168 |
-| 30D | Daily avg | 30 |
-| 90D | Daily avg | 90 |
+**Changes made:**
 
-Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallback to internal SRAM. Total ~3.5 KB.
+1. **Header** — replaced `ui_build_header(s_scr, "TVOC HISTORY")` + inline `LV_SYMBOL_LIST` icon
+   with the shared `header_t` component (same one Dashboard uses): `header_create()`,
+   `header_set_title("CHART")`, `header_set_wifi_strength()`, `header_set_sd_status()`,
+   `header_set_time()`, `header_set_date()`, `header_enable_menu()`. Pixel identical to Dashboard.
+2. **Period selector** — same `lv_btnmatrix` + `period_cb()`, restyled as rounded pill buttons
+   labelled `"90 Days" / "30 Days" / "07 Days"` (was `"7D"/"30D"/"90D"`), 90 Days active by
+   default. `period_t` / `PERIOD_POINTS[]` reordered to match the new button order — the
+   index-to-period mapping logic itself is unchanged. Active = blue fill + white text, inactive
+   = white fill + dark text, `IVF_COLOR_BORDER` outline.
+3. **Calendar button** — new non-clickable button next to the period selector using the new
+   `assets_draw_calendar()` icon (no functionality yet, per spec).
+4. **TVOC title + legend** — `"TVOC (ppb)"` font raised to `IVF_FONT_NORMAL` (same as header
+   title). Legend rebuilt as colour dot + muted text: `"Daily Average"` / `"Max"`.
+5. **Chart appearance** — white background, rounded border, light grid
+   (`lv_chart_set_div_line_count(chart, 4, 6)`), small circular point markers. **Area fill under
+   the average line only:** LVGL 8.4's `lv_chart` has no native per-series area fill for
+   `LV_CHART_TYPE_LINE` (confirmed against the vendored `lv_chart.c` — `LV_PART_ITEMS` bg-opacity
+   only affects bar charts). Implemented via a `chart_draw_part_cb()` hook on
+   `LV_EVENT_DRAW_PART_BEGIN` / `LV_CHART_DRAW_PART_LINE_AND_POINT`: identifies the average
+   series by `dsc->sub_part_ptr == s_ser_avg` and paints a translucent quad
+   (`lv_draw_polygon()`) from each line segment down to the chart's bottom edge. The max series
+   gets no such hook, so it renders as a clean line — matching Figma. `lv_chart` itself was not
+   replaced or subclassed.
+6. **Stat cards** — `make_stat_card()` rebuilt on the shared `card_t` component (adds a light
+   drop shadow for free) instead of raw `lv_obj_create()`. `LV_SYMBOL_UP/DOWN/LIST` icons
+   replaced with 4 new drawn icons. Removed a hardcoded `lv_color_hex(0x7B1FA2)` in favour of
+   `IVF_COLOR_TEXT`.
+7. **New drawn icons** (`assets.h/.c`, geometric primitives, no bitmaps, no CMakeLists.txt
+   change): `assets_draw_calendar()`, `assets_draw_date_range()`, `assets_draw_chart_average()`,
+   `assets_draw_chart_max()`, `assets_draw_chart_min()`.
+8. **Illustrative sample data** — `SAMPLE_AVG[12]`/`SAMPLE_MAX[12]` static arrays baked into
+   `screen_chart.c`, resampled to the active period's point count by `load_sample_series()`
+   (called from `apply_period()`). Stat cards show static Figma values (`245`/`820`/`82`/`26`).
+   This is UI-layer decoration only — no data module was added. See TD-14.
 
-**Files to create:**
-- `main/data/history_manager.c/.h` — `history_manager_init()`, `history_push(float voc_ppb)`, `history_get_hourly()`, `history_get_daily()`; `history_point_t` struct (avg/min/max/timestamp)
+**Not implemented in this phase** (per spec): `history_manager`, CSV export, real sensor data,
+RTC, NVS, chart animations/zoom/scroll/gestures.
 
-**Files to modify:**
-- `main/CMakeLists.txt` — add `"data/history_manager.c"` (INCLUDE_DIRS already has `"data"`)
+**Files modified (2):**
+- `main/ui/screens/screen_chart.c` — full visual rewrite
+- `main/ui/assets/assets.h` / `assets.c` — 5 new icon functions
 
-**Acceptance criteria:**
-- `history_push()` called from `sensor_task()` without crashing
-- `history_get_hourly(out, 168)` returns 0 on empty, correct count after data accumulates
-- `heap_caps_print_heap_info()` shows PSRAM allocation successful
+**No files created. No CMakeLists.txt change required.**
 
 ---
 
-### ⬜ Phase 4D — Chart Data Binding
-**Status: PLANNED**
+### ✅ Phase 5.2 — Chart Screen Visual Polish
+**Status: COMPLETE**
 
-**Goal:** Wire `screen_chart_refresh()` to `history_manager` — replace placeholder series with live aggregated data.
+**Goal:** Make the chart screen match the approved Figma as closely as possible. Pure visual
+refinement — no architecture, data-model, `history_manager`, statistics-engine, or RTC changes.
+The shared `header_t` component is **frozen** and was not touched.
 
-**Files to modify:**
-- `main/ui/screens/screen_chart.c` — implement `screen_chart_refresh()` (query `history_get_hourly()` or `history_get_daily()` per active period; call `lv_chart_set_point_count()` + `lv_chart_set_value_by_id()` loop; handle partial data)
-- `main/sensors/sensor_manager.c` — add `history_push(fresh.voc_ppb)` in `sensor_task()` after `alarm_manager_check()`
+**Visual improvements made:**
 
-**Acceptance criteria:**
-- After 7+ hours of runtime, 7D chart shows hourly data points
-- Tapping period button redraws chart with correct dataset
-- Partial data (< full period of history) renders correctly without crash
-- `screen_chart_refresh()` called from `dash_timer_cb` (LVGL timer, `ui.c`) when chart screen is active — guard with `if (s_current == SCREEN_CHART)`
+1. **Legend** — replaced colour-dot bullets with `assets_draw_chart_average()` /
+   `assets_draw_chart_max()` icons; labels now `"Daily Average"` / `"Maximum"` (was `"Max"`).
+   No `LV_SYMBOL_*`. Icons vertically centred against the `"TVOC (ppb)"` title row.
+2. **Chart container spacing** — more room below the title (`CHART_Y` 72→84), slightly shorter
+   chart (`CHART_H` 180→160), tighter Y-axis label gutter (`CHART_X` 36→32), named bottom gap
+   before the stat cards (`CHART_BOTTOM_GAP=16`). Content still fits `IVF_CONTENT_H` (430) with
+   ~22 px to spare.
+3. **Chart style** — background changed white→`IVF_COLOR_NAV` (light grey, reused from the
+   header palette — no new hardcoded colour); grid lines softened with `LV_OPA_60`; internal
+   padding increased 4→6 px. Green average / orange max lines, rounded point markers, and the
+   average-line area fill (added in Phase 5.1) are unchanged. `lv_chart` itself untouched.
+4. **Chart axes** — Y-axis already matched the Dashboard gauge's scale-label font/colour
+   (`IVF_FONT_SMALL` + `IVF_COLOR_TEXT_MUTED`, confirmed from Phase 5.1); tick marks shortened
+   and minor sub-ticks removed for a cleaner look. X-axis relabelled from relative day-offsets
+   to illustrative month names (`"Feb"`…`"Jul"`) via a static 6-entry lookup indexed by the
+   tick's major index — a label-formatting change only, point-count/period logic untouched.
+5. **Statistics cards** — `shadow` flipped `true`→`false` to exactly match Dashboard's sensor
+   tiles (radius/border were already identical); value/unit spacing widened so units read as
+   `"245  ppb"` instead of `"245ppb"`.
+6. **Card icons** — all four card icons unified to one 16×16 size (previously 16 for three,
+   18 for the date-range icon); `assets_draw_calendar()` / `assets_draw_date_range()` redrawn
+   at 16×16 to match. Right-aligned within each card, same as before.
+7. **Spacing/consistency audit** — screen margin (8 px), inter-card gap (8 px), and all
+   typography/colour tokens reuse existing `ui.h` constants; no new hardcoded values.
+
+**Known limitations:**
+- X-axis month labels are static illustrative placeholders, not real dates, and don't vary by
+  the selected period (7D/30D/90D) — see TD-15. Real labels arrive with Phase 4D/5.3.
+- `lv_chart` 8.4 always draws Y-axis labels in an external gutter to the left of the chart's
+  own bordered box (confirmed against the vendored source) — a single full-width card with
+  numbers "inside" it, as in the Figma mock, isn't achievable without a custom draw hook, which
+  was out of scope for a styling-only phase. The gutter was tightened instead (36→32 px).
+- Chart lines remain straight-segment (no spline/bezier) — `lv_chart` 8.4 has no built-in curve
+  smoothing.
+- Stat-card sample values (245/820/82/26) and the chart's sample series remain the Phase 5.1
+  static illustrative data (TD-14) — no statistics engine exists yet.
+
+**Files modified (2):**
+- `main/ui/screens/screen_chart.c` — legend, chart spacing/background/grid/axis polish, card
+  shadow + spacing, unified icon size
+- `main/ui/assets/assets.h` / `assets.c` — `assets_draw_calendar()` / `assets_draw_date_range()`
+  resized 18×18 → 16×16
+
+**No files created. No CMakeLists.txt change required.**
+
+**Next phase (completed below):** Phase 5.3 — History Manager Backend.
 
 ---
 
-### ⬜ Phase 5 — Data Logs Screen + Sensor Record Buffer
+### ✅ Phase 5.3 — History Manager Backend
+**Status: COMPLETE**
+
+**Goal:** Backend architecture only — the historical-data storage layer that will eventually
+drive Chart, Logs, statistics, and CSV export. No LVGL dependency, no UI changes. Dashboard
+and Chart UI (Phase 5.2, frozen) were **not touched**. Simulated sensor data only; no RTC,
+flash, WiFi, or real sensors; no statistics calculated; no CSV export.
+
+**Pre-implementation architecture review (requested before coding):**
+- Found that a separate `record_manager.c` was already planned (old Phase 5 Logs-screen note)
+  for a "1-minute snapshot, 24h ring buffer" — a second store of the same sensor readings that
+  `history_manager` is now explicitly chartered to own for *both* Chart and Logs. **Resolved
+  by retiring `record_manager.c`** — the Logs screen will read `history_manager` instead once
+  implemented (see the updated Phase 5 note below, including one open gap: `history_manager`
+  today is hourly-resolution only, no per-minute buffer).
+- Found that the existing sibling module `alarm_manager.h` depends directly on
+  `sensor_manager.h`'s `sensor_data_t` type. **Avoided that coupling deliberately**:
+  `history_manager.h` has zero dependency on `sensor_manager.h` or `alarm_manager.h` —
+  `history_manager_add_sample()` takes plain `float` scalars. `sensor_manager.c` is the only
+  file that includes `history_manager.h`; the dependency is one-directional.
+
+**Design — single ring buffer, sliced by period (not three separate buffers):**
+- One 2160-slot circular buffer of hourly-averaged records covers the full 90-day horizon.
+  `HISTORY_PERIOD_7D`/`_30D`/`_90D` are just window sizes (168 / 720 / 2160) into that same
+  buffer — asking for a longer period returns more of the one buffer, nothing is duplicated.
+- Two lightweight accumulators sit in front of it: a single "latest reading" cache (for
+  `history_manager_get_latest()`), and a running-sum accumulator for the *in-progress* hour
+  (no individual per-minute records are stored — only sums — which is why the RAM footprint is
+  dominated entirely by the 2160-slot buffer).
+- `sensor_task()` (`sensor_manager.c`, 1 Hz) calls `history_manager_add_sample()` every 60th
+  iteration (~once/minute), skipped on a sensor fault. Every 60 of those calls (~1 hour), the
+  running sums are averaged into one record and pushed into the ring buffer, overwriting the
+  oldest slot once full.
+- All state is protected by a `SemaphoreHandle_t` mutex, same pattern as `sensor_manager.c` /
+  `alarm_manager.c` (writer runs on the sensor task / Core 0; readers will run on the LVGL task
+  / Core 1 once Phase 5.4 calls them).
+
+**API (project's `module_verb_noun()` convention; 1:1 mapping to the requested `History_*`
+names is documented in the header and in ARCHITECTURE.md):**
+```c
+esp_err_t history_manager_init(void);
+void      history_manager_add_sample(float voc_ppb, float temperature_c, float humidity_pct);
+uint16_t  history_manager_get_samples(history_period_t period, history_record_t *out, uint16_t max_count);
+bool      history_manager_get_latest(history_record_t *out);
+void      history_manager_clear(void);
+uint16_t  history_manager_get_sample_count(history_period_t period);
+uint16_t  history_manager_get_range(history_period_t period, uint32_t from_ts, uint32_t to_ts, history_record_t *out, uint16_t max_count);
+```
+`history_record_t` = `{ timestamp_s, voc_ppb, temperature_c, humidity_pct, alarm_state }` —
+`alarm_state` is reserved (always 0; no `alarm_manager` dependency added). New fields belong at
+the end of the struct. Timestamps are `esp_timer_get_time()/1e6` (boot-relative — same
+convention as `alarm_manager.c` and `ui.c`'s `dash_timer_cb`) until an RTC/SNTP source exists.
+
+**Memory estimate:**
+`sizeof(history_record_t)` = 20 bytes (4-byte aligned: 3 floats + a uint32 = 16 B, + 1 B
+`alarm_state` + 3 B padding). 2160 × 20 B = **43,200 B ≈ 42.2 KB**, allocated via
+`heap_caps_malloc(MALLOC_CAP_SPIRAM)` with an internal-SRAM fallback (same pattern as
+`lvgl_port.c`'s draw buffer). Accumulator + latest-cache + mutex overhead is negligible
+(<150 B). Storing raw per-minute samples for 90 days instead would need ≈2.6 MB — larger than
+the entire PSRAM budget — which is why only the hourly average is retained long-term.
+
+**Data flow:** `sensor_backend_sim.c` → `sensor_task()` (1 Hz) → `alarm_manager_check()`
+[unchanged] + `history_manager_add_sample()` [new, ~1/min] → hourly ring buffer → **no readers
+yet** (Chart/Logs/statistics/CSV export all read through `history_manager_get_*()` starting
+Phase 5.4+). See ARCHITECTURE.md's Phase 5.3 write-up for the full ASCII diagrams.
+
+**Files created (2):**
+- `main/data/history_manager.h` — public API, `history_record_t` / `history_period_t`
+- `main/data/history_manager.c` — ring buffer, accumulator, mutex-protected implementation
+
+**Files modified (3):**
+- `main/sensors/sensor_manager.c` — `#include "data/history_manager.h"`; `sensor_task()` calls
+  `history_manager_add_sample()` every 60th iteration (skipped on sensor fault)
+- `main/app_main.c` — `#include "data/history_manager.h"`; `history_manager_init()` called
+  after `alarm_manager_init()`, before `sensor_manager_init()`
+- `main/CMakeLists.txt` — `"data/history_manager.c"` added to SRCS
+
+**Dashboard and Chart UI confirmed untouched** — no changes to any file under `main/ui/`.
+
+**Known limitations:**
+- No screen reads `history_manager` yet (Phase 5.4 wires the chart).
+- Hourly resolution only — no per-minute buffer beyond the single latest-reading cache; a
+  future Logs screen needing true 1-minute rows will need a small addition here (TD-16), not a
+  new standalone module.
+- RAM-only (TD-8, unchanged) — reboot clears all history; NVS/SD persistence is Phase 9.
+- Boot-relative timestamps (no RTC yet).
+- `alarm_state` reserved, always 0 (Phase 8 wiring).
+
+**Next phase:** Phase 5.4 — Chart Data Binding (`screen_chart_refresh()` reads
+`history_manager`, replacing the Phase 5.1 static sample data).
+
+---
+
+### ✅ Phase 5.4 — Chart Mode Integration & History Binding
+**Status: COMPLETE — architecture review below was approved, then implemented**
+
+**Functional design change:** the Chart screen's 90D/30D/7D period selector is being removed.
+Two modes replace it: **Last 7 Days** (default on open — one point/day, 7 points, stats from
+those 7 days) and **Selected Day** (via the calendar icon — one point/hour for a single chosen
+day, stats from that day only). Reviewed against Phase 5.3's `history_manager` and the current
+`screen_chart.c` before writing any code, per request.
+
+**Verdict on Phase 5.3's storage:** unchanged, still correct. The one 90-day hourly ring buffer
+already covers both modes — 7 daily points come from grouping the most recent 168 hourly
+records into 7×24 buckets **at query time**; the day view is just a 24-hour `get_range()`. No
+new ring buffer, no duplicate storage.
+
+**Two gaps found, independent of the mode change itself:**
+1. `history_period_t` (7D/30D/90D) modeled the period-selector buttons directly — a UI concept
+   baked into a module that's supposed to be UI-independent. **Removed**, replaced by plain
+   `(from_ts, to_ts)` ranges.
+2. The Phase 5.3 accumulator only ever tracked a running sum (for the average) — no min/max.
+   A "Maximum" series or "Minimum" stat card has nothing real to plot once wired to live data.
+   **Fixed by widening `history_record_t`** (adds `min_voc_ppb`/`max_voc_ppb`), not by adding
+   storage — safe now since `screen_chart_refresh()` has zero real callers today.
+
+**Recommended API (replaces the 3 names given for review — `Get Last 7 Days` / `Get Day
+History` / `Get Statistics`):**
+```c
+uint16_t history_manager_get_range(uint32_t from_ts, uint32_t to_ts,
+                                    history_record_t *out, uint16_t max_count);
+uint16_t history_manager_get_daily_aggregates(uint32_t from_ts, uint32_t to_ts,
+                                               history_record_t *out, uint16_t max_days);
+uint16_t history_manager_get_count_in_range(uint32_t from_ts, uint32_t to_ts);
+void     history_manager_compute_stats(const history_record_t *records, uint16_t count,
+                                        float threshold_ppb, history_stats_t *out);
+```
+- "Get Last 7 Days" → generalized to `get_daily_aggregates(from_ts, to_ts, ...)` with no "7"
+  baked in — Chart just calls it with a 7-day range; a future 30-day view reuses it as-is.
+- "Get Day History" → not a separate function; it's `get_range()` bounded to 24 hours.
+- "Get Statistics" → kept, but as **one** reducer, not two — hourly and daily records now
+  share the same widened struct, so one function serves both modes.
+
+Memory impact of the widened struct: 20B → 28B/record × 2160 ≈ **59 KB** (was ~42 KB) —
+still trivial.
+
+**Data flow:** `sensor_task()` → `history_manager_add_sample()` [unchanged] → hourly
+accumulator (now with running min/max) → 90-day ring buffer → **either** `get_range()` (Mode 2)
+**or** `get_daily_aggregates()` (Mode 1) → `history_manager_compute_stats()` (same reducer for
+both) → `screen_chart_refresh()`.
+
+**Mode switching:** a `chart_mode_t` state in `screen_chart.c`, reset to Last-7-Days every time
+the screen opens. The calendar icon (currently decorative) becomes functional — taps open a
+date picker (`lv_calendar` already enabled: `CONFIG_LV_USE_CALENDAR=y`); picking a day switches
+to Selected-Day mode and calls `screen_chart_refresh()`, which branches on mode for the query,
+X-axis labels, and 4th stat card.
+
+**No-RTC limitation (flagged):** all timestamps remain boot-relative — there's no real
+midnight to align day buckets to, and no real dates for the picker. `get_daily_aggregates()`
+buckets by fixed 24h windows counting back from *now* (relative days), not wall-clock midnight,
+until RTC/SNTP exists (Phase 7) — same caveat as TD-1/R-7.
+
+**Statistics card:** the Days/Hours split is correct, kept as proposed. Recommend counting by
+`max_voc_ppb` exceeding the threshold (peak-based, not average-based) for both modes. Flagged
+(not changed): 150 ppb doesn't match the app's existing 300/500 ppb warn/alarm thresholds —
+treated as an intentional third tier since it's been stated twice; suggest a named constant.
+
+**Revision — mode-switch-back, dynamic title, and one new finding (confirmed after follow-up):**
+- ✅ **"← Last 7 Days" chip** — agreed as the return mechanism (visible only in Selected-Day
+  mode, immediate single-tap return). Placement refinement: anchor it in the vacated
+  period-bar row rather than beside the title, since the title's length changes with the mode
+  and a moving/crowded neighbour would make the tap target unstable.
+- ✅ **Dynamic title** (`"TVOC Trend (Last 7 Days)"` / `"TVOC Trend (24 Jun 2026)"`) — agreed
+  as the end-state format, with two caveats: (1) pre-RTC there's no real calendar date to show
+  — render a relative label instead (`"TVOC Trend — 3 Days Ago"`); the same title code upgrades
+  to real dates automatically once RTC/SNTP lands (Phase 7), no logic change needed. (2) Both
+  title strings are longer than the current static label and won't fit sharing a row with the
+  legend as today — give the title its own row (the vacated period-bar space allows this) and
+  move the legend to a row beneath it.
+- 🆕 **New finding:** the legend text `"Daily Average"` is wrong in Mode 2 (hourly, not daily)
+  — generalize to `"Average"` in both modes. Title/legend/4th-card are now all mode-dependent;
+  recommend one `apply_mode_labels()`-style update point rather than three scattered edits.
+- ✅ Always reset to Last-7-Days on screen entry — confirmed, no sticky state.
+- ⬜ 150 ppb threshold — no further input; proceeding as a named (non-configurable) constant.
+
+**Files that will change once approved (none touched yet):** `main/data/history_manager.h/.c`,
+`main/ui/screens/screen_chart.c`. No CMakeLists.txt change expected.
+
+---
+
+#### Implementation (approved design above, now built)
+
+**Files modified (2), no files created, no CMakeLists.txt change:**
+- `main/data/history_manager.h/.c` — removed `history_period_t`; added `get_range()` (no period
+  param), `get_daily_aggregates()`, `get_count_in_range()`, `compute_stats()`,
+  `VOC_WARNING_THRESHOLD_PPB`; widened `history_record_t` (`voc_ppb` → `avg_voc_ppb`, added
+  `min_voc_ppb`/`max_voc_ppb`); accumulator now tracks running min/max per hour.
+- `main/ui/screens/screen_chart.c` — removed the period selector (`period_bar`, `period_cb`,
+  `apply_period`, `PERIOD_POINTS`, `period_t`, `SAMPLE_AVG`/`SAMPLE_MAX`/`MONTHS` dummy data);
+  added `chart_mode_t` + `apply_chart_mode()` (the single UI update point), the "◀ Last 7 Days"
+  chip, a day-picker overlay (`lv_list` of 30 relative-day rows), dynamic title, generalized
+  legend text, and mode-aware 4th stat card.
+
+**New/changed APIs:** see the "Modified/new APIs" table in ARCHITECTURE.md's Phase 5.4 section
+— summary: `get_samples(period,...)`/`get_sample_count(period)`/`history_period_t` removed;
+`get_range(from_ts,to_ts,...)` (period param dropped), `get_daily_aggregates()`,
+`get_count_in_range()`, `compute_stats()`, `VOC_WARNING_THRESHOLD_PPB` added.
+
+**Mode flow:** `screen_chart_create()` and `screen_chart_refresh()` both call
+`apply_chart_mode()`. `screen_chart_refresh()` always passes `CHART_MODE_LAST_7_DAYS` (called by
+`ui_goto_screen()` on every navigation to Chart — reset-on-entry, no new call site needed). The
+calendar icon → day picker → `apply_chart_mode(CHART_MODE_SELECTED_DAY)`; the "◀ Last 7 Days"
+chip (visible only in that mode) → `apply_chart_mode(CHART_MODE_LAST_7_DAYS)`. See
+ARCHITECTURE.md for the full state diagram and updated architecture diagram.
+
+**Memory impact:** `history_record_t` 20 B → 28 B (added 2 floats). Ring buffer 2160 × 28 B =
+**≈59.1 KB** (was ~42.2 KB at Phase 5.3), still PSRAM-allocated with SRAM fallback.
+`get_daily_aggregates()` uses a ~900 B fixed local bucket array on the caller's stack during the
+call only (LVGL task has an 8 KB stack — no concern).
+
+**Bug caught during implementation:** `CONFIG_LV_SPRINTF_USE_FLOAT` is **off** in this project's
+sdkconfig, so `lv_snprintf("%.0f", ...)` cannot format floats — would have silently mis-rendered
+every stat-card value and the 4th card's threshold title. Fixed by using standard `snprintf()`
+(`<stdio.h>`) for all float formatting, matching `screen_dashboard.c`'s existing convention.
+Purely textual/integer formatting still uses `lv_snprintf()`.
+
+**Known limitations:**
+- No-RTC: day/hour bucketing and the day picker are relative-offset based, not wall-clock
+  calendar-aligned (TD-17). `format_relative_day_label()` and the bucketing math in
+  `get_daily_aggregates()` are the only two places that change once RTC/SNTP lands (Phase 7).
+- Cold-start / soak-test verification not exercised end-to-end — the simulated backend runs in
+  real wall-clock time, so a fully populated 7-day view needs 7 real days of uptime to observe
+  (TD-18). Empty/partial states verified by code inspection (`"--"` cards, `LV_CHART_POINT_NONE`).
+- Day picker is a flat relative list (30 rows), not a calendar grid — consistent with no-RTC.
+- 150 ppb threshold remains fixed/non-configurable, per the review (no further input given).
+- `history_manager` is still hourly-resolution only (TD-16, unaffected by this phase).
+
+**Confirmations:**
+- Dashboard: untouched — no changes to any file under `main/ui/` other than `screen_chart.c`.
+- History Manager remains the single source of truth — `screen_chart.c` reads exclusively
+  through its public API; no new data manager was created; `record_manager.c` stays retired.
+
+**Next phase:** Phase 5.5 — not yet scoped; awaiting review of this implementation.
+
+---
+
+### ✅ Phase 5.4.1 — Real Bitmap Icons for the Chart Screen
+**Status: COMPLETE**
+
+**Context:** 5 unused, unregistered files were found in `main/ui/assets/` during the Phase 5.3
+review (`calendar_icon.c`, `chart_average_icon.c`, `chart_maximum_icon.c`,
+`chart_minimum_icon.c`, `date_range_icon.c`) — real LVGL-converted bitmap icons matching the
+names originally referenced in the Phase 5.1 spec, but never wired into the build. They
+contained a compile-breaking bug inherited from the icon-conversion tool: hyphens in C
+identifiers (e.g. `LV_ATTRIBUTE_IMG_LETS-ICONS_DATE-RANGE-FILL`, `carbon_chart-average`) —
+invalid syntax. Flagged during Phase 5.3/5.4 but deliberately left untouched (both phases were
+explicitly out of scope for Chart UI icon changes). This phase fixes and wires them in.
+
+**Fix:** every hyphen in each file's identifiers (macro guard, array name, struct name, `.data`
+reference) replaced with an underscore — confirmed via grep that hyphens appear nowhere else in
+these files (pixel data is pure `0x..` hex), so no pixel data was touched, only identifiers:
+
+| File | Fixed identifier | Size |
+|---|---|---|
+| `calendar_icon.c` | `lets_icons_date_range_fill` | 24×24 |
+| `date_range_icon.c` | `ic_outline_date_range` | 16×16 |
+| `chart_average_icon.c` | `carbon_chart_average` | 16×16 |
+| `chart_maximum_icon.c` | `tdesign_chart_maximum` | 16×16 |
+| `chart_minimum_icon.c` | `tdesign_chart_minimum` | 16×16 |
+
+**Wiring:** all 5 added to `CMakeLists.txt` SRCS; 5 `LV_IMG_DECLARE()` entries added to
+`assets.h`; the 5 `assets_draw_*()` functions in `assets.c` rewritten from hand-drawn
+`make_icon_cont()`/`make_filled_rect()`/`lv_line` primitives to `lv_img_create()` +
+`lv_img_set_src()` + `lv_obj_set_style_img_recolor(..., LV_OPA_COVER)` — the same pattern
+already proven by `assets_draw_thermometer/_humidity/_sd_card` (confirmed same
+`LV_IMG_CF_TRUE_COLOR_ALPHA` format). Function signatures unchanged, so `screen_chart.c` needed
+only one change: the calendar bitmap is 24×24 (was a 16×16 hand-drawn icon), so its `cal_btn`
+centering math was updated (`CAL_ICON_SIZE` constant added). The other 4 bitmaps are 16×16,
+matching `STAT_ICON_SIZE` exactly — no other layout change needed.
+
+**Files modified (5 pre-existing bitmap `.c` files fixed, no new files):**
+- `main/ui/assets/{calendar,date_range,chart_average,chart_maximum,chart_minimum}_icon.c` —
+  identifier fix only
+- `main/ui/assets/assets.h` — 5 new `LV_IMG_DECLARE()`
+- `main/ui/assets/assets.c` — 5 `assets_draw_*()` bodies switched to bitmaps
+- `main/ui/screens/screen_chart.c` — `CAL_ICON_SIZE` added, calendar centering updated
+- `main/CMakeLists.txt` — 5 new SRCS lines
+
+**Known limitation:** not visually verified on hardware/simulator in this pass — no device or
+simulator available in this environment. Flash-and-look recommended before full sign-off.
+
+**Next phase:** Phase 5.5 — not yet scoped.
+
+---
+
+### ✅ Phase 5.5 — Real Calendar Date Picker
+**Status: COMPLETE**
+
+**Context:** the Phase 5.4 Selected-Day picker used an `lv_list` of relative rows ("Today",
+"Yesterday", "2 Days Ago", …). User feedback: this doesn't give access to a real 90-day range
+and can't express a date the user actually wants (a specific day, possibly in a different month
+or year than today). Requirements given: real calendar date selection, bounded to exactly the
+90 days `history_manager` retains, correct navigation across a year boundary (e.g. selecting a
+day in Dec 2025 while "today" is in 2026), Selected-Day X-axis at fixed 4-hour ticks
+(0/4/8/12/16/20/24), and Last-7-Days X-axis showing real calendar dates (e.g. "30 Jun … 6 Jul")
+instead of relative labels. Y-axis (0/250/500/750/1000 ppb) explicitly unchanged.
+
+**Design decision — no `<time.h>`:** no RTC/SNTP exists yet (Phase 7), so `history_manager`
+timestamps are boot-relative. Rather than risk depending on `mktime()`/`gmtime()`/`timegm()`
+newlib behaviour that could not be verified on this target in this environment (no toolchain
+installed here), calendar arithmetic was implemented as dependency-free integer math — Howard
+Hinnant's public-domain `days_from_civil()`/`civil_from_days()` — plus manual month-name tables
+instead of `strftime()`. A fixed reference date (`CHART_REF_YEAR/MONTH/DAY` = 2026-07-06) is
+anchored to boot time once, in `calendar_init_reference()`; only that one function's constants
+need to change once real time exists.
+
+**What changed in `screen_chart.c`:**
+- Day picker: `lv_list` relative rows → real `lv_calendar` grid (`s_picker_calendar`) with
+  hand-rolled prev/next month buttons (`s_picker_prev_btn`/`s_picker_next_btn` +
+  `s_picker_month_lbl`), since LVGL's built-in `lv_calendar_header_arrow` has no min/max bound
+  support. `refresh_picker_calendar()` disables every day cell outside
+  `[s_cal_min, s_cal_today]` (today − 90 days) via `LV_BTNMATRIX_CTRL_DISABLED`, and disables
+  the prev/next buttons at the boundary month — verified against LVGL's own internal button-index
+  formula (`first_dow + (day-1) + 7`) read from the vendored `lv_calendar.c` source, so the
+  disabled cells line up exactly with the grid LVGL draws.
+- Day selection: `on_picker_day_clicked()` on `LV_EVENT_VALUE_CHANGED` (bubbles up from the
+  internal button matrix, which has `LV_OBJ_FLAG_EVENT_BUBBLE` set) reads
+  `lv_calendar_get_pressed_date()`, stores a real `lv_calendar_date_t s_selected_date`
+  (replacing the old relative `s_selected_day_offset`), and calls `apply_chart_mode()`.
+- Title: Selected-Day mode now shows "TVOC Trend - 06 Jul 2026" instead of "3 Days Ago".
+- X-axis (Selected Day): 5 uneven ticks (`0h/6h/12h/18h/23h`) → 7 fixed 4-hour ticks
+  (`0,4,8,12,16,20,24`), per spec.
+- X-axis (Last 7 Days): static relative labels (`-6d … Today`) → real per-record calendar dates
+  (`s_day_axis_labels[7][8]`, "D Mon" format), computed from each `history_record_t.timestamp_s`
+  independently, so a week spanning a month boundary (e.g. "30 Jun" → "6 Jul") labels correctly.
+
+**Files modified (1, no files created):** `main/ui/screens/screen_chart.c` only. No changes to
+`history_manager.h/.c` (calendar logic is entirely a Chart-UI concern) or the Dashboard.
+
+**Known limitations:**
+- Not visually verified on hardware/simulator — no device/simulator available in this
+  environment, same caveat as every prior phase. Recommend a flash-and-look pass specifically
+  exercising the Dec 2025 → Jan 2026 month-nav boundary and the 90-day min-date clamp.
+- "Today" is a fixed reference date anchored to boot time, not a live RTC/wall-clock read —
+  pre-existing no-RTC limitation (TD-17), not a new one; only `calendar_init_reference()` needs
+  to change once RTC/SNTP exists.
+- No compiler available in this environment to build-verify; correctness checked by hand-tracing
+  the Hinnant calendar algorithm against its published reference and cross-checking LVGL
+  calendar API usage against the vendored `lv_calendar.c`/`.h` source.
+
+**Next phase:** not yet scoped — awaiting review of this implementation.
+
+---
+
+### ✅ Phase 5.6 — Picker Simplification + Axis Label Fix
+**Status: COMPLETE**
+
+**Context:** feedback on Phase 5.5: (1) simplify the calendar-grid picker back down to a plain
+2-option dropdown ("Today" / "7 Days") for now — arbitrary-date selection isn't needed yet; (2)
+neither chart axis was showing any tick labels at all.
+
+**Picker simplification:** removed `s_picker_calendar` and everything that supported it
+(`s_picker_prev_btn`/`s_picker_next_btn`/`s_picker_month_lbl`, `refresh_picker_calendar()`,
+`on_picker_month_nav()`, `on_picker_day_clicked()`, `open_day_picker()`, plus the
+calendar-grid-only math helpers `calendar_is_leap_year/_days_in_month/_day_of_week/_date_serial`
+— none of these have any other caller). The overlay now shows 2 rows, "Today" and "7 Days";
+tapping either hides it and calls `apply_chart_mode()` directly. `chart_mode_t`'s second value
+is renamed `CHART_MODE_SELECTED_DAY` → `CHART_MODE_TODAY`: it always means "today" (recomputed
+live each call), not a stored arbitrary date, so `s_selected_date`/`s_cal_today`/`s_cal_min` are
+gone. Title for this mode is now the literal "TVOC Trend - Today". The Phase 5.5 dependency-free
+calendar math (`days_from_civil`/`civil_from_days`/`calendar_init_reference`/
+`boot_ts_to_calendar_date`/`calendar_date_to_boot_ts`) is kept — it still drives the Last-7-Days
+real-calendar-date X-axis labels and Today's midnight-aligned day-boundary lookup.
+
+**Axis label fix:** root cause was `lv_obj_set_style_clip_corner(s_chart, true, 0)`, added in
+Phase 5.2 purely for the rounded-border look. LVGL draws chart tick labels *outside* the
+object's own coordinate box (Y labels left of x=0, X labels below the bottom edge — this
+screen's `CHART_X`/`CHART_BOTTOM_GAP` constants were sized to reserve exactly that space).
+`clip_corner` applies a rounded-rect mask scoped to the object's own box to *all* of its
+drawing, so anything rendered outside that box — both axes' labels — was being masked away
+entirely, with no other visible side effect. Fix: removed the `clip_corner` call; the chart's
+background/border are a plain filled rounded rect drawn fully inside its own box, so nothing
+was actually relying on that clip for correctness.
+
+**Files modified (1, no files created):** `main/ui/screens/screen_chart.c` only.
+
+**Known limitations:**
+- Not visually verified on hardware/simulator — no device/simulator in this environment.
+  Recommend confirming the axis-label fix specifically with a flash-and-look pass, since it
+  reverses an unverified Phase 5.2 assumption.
+- Arbitrary-date selection is deferred, not lost — the calendar math it needs is already in
+  place and in daily use by the Last-7-Days/Today logic.
+
+**Next phase:** not yet scoped — awaiting review of this implementation.
+
+**Follow-up (same day, #1):** title was still rendering on its own row below the calendar button
+instead of alongside it. Swapped the two rows: the title now lives in Row A next to `cal_btn`
+(vertically centered against its 34 px height, width capped via new `TITLE_W` so it stops short
+of the button — no overlap), and the "◀ Last 7 Days" chip moved down into the row the title used
+to occupy (still Today-mode-only, still reserved whether shown or not, so nothing shifts when
+switching modes). Chart/stats cards shift down by ~20 px to fit; content height (430 px) still
+has ~10 px to spare. `screen_chart.c` only.
+
+**Follow-up (same day, #2):** the gap between the title and the "Average"/"Maximum" legend was
+too large — it was sized to reserve a full 34 px chip row plus two 6 px gaps even though the
+chip is empty text most of the time. Tightened it: chip shrunk to `CHIP_H` (28 px, was reusing
+the 34 px title-row height) and the two inter-row gaps reduced from 6 px to 4 px, reclaiming
+12 px total. That 12 px was added directly to `CHART_H` (150 → 162 px) rather than left as
+empty space, per request — `STATS_Y` (and everything below it) is computed from
+`CHART_Y + CHART_H + CHART_BOTTOM_GAP` and lands on the exact same pixel as before, so the stat
+cards don't move. `screen_chart.c` only.
+
+**Follow-up (same day, #3):** removed the "◀ Last 7 Days" return chip entirely — the calendar
+dropdown already has a "7 Days" option that does the same thing, so the chip was a redundant
+second way back to the default mode. `s_chip`, `on_chip_back_click()`, and the
+mode-visibility toggle for it are gone; `chart_mode_t` no longer needs any UI element tied to
+`CHART_MODE_TODAY` beyond the title text. The legend row moved up into the space the chip row
+used to reserve (`LEGEND_Y` now sits directly below the title row, 18 px gap instead of the old
+~46 px chip-reserved gap), and that reclaimed space was added to the chart (`CHART_H`:
+162 → 180 px). `STATS_Y` still resolves to the same pixel as before. `screen_chart.c` only.
+
+---
+
+### ✅ Phase 5.7 — Chart Screen Freeze
+**Status: COMPLETE**
+
+The Chart screen (`screen_chart.c/.h`) is declared **FROZEN** — same standing as the Dashboard.
+No further changes without explicit approval. Work moves on to the **Logs screen** (Phase 5 in
+the roadmap, still `⬜ PLANNED`): a table view of `history_manager` records — date/time, TVOC,
+temperature, humidity — with a record count, CSV export button, and "Load More" pagination.
+
+**Files affected:** none — status declaration only.
+
+---
+
+*(Phase 4C and Phase 4D, as originally sketched in earlier revisions of this log, are both
+superseded by Phase 5.3 and the Phase 5.4 review above.)*
+
+---
+
+### ⬜ Phase 5 — Data Logs Screen + History Integration (`record_manager` retired)
 **Status: NOT STARTED**
 
-**Goal:** Implement `screen_logs.c` with a scrollable `lv_table` showing per-minute sensor records.
+**Goal:** Implement `screen_logs.c` with a scrollable `lv_table` showing recent sensor records.
+
+**Architecture review finding (Phase 5.3):** the originally-planned standalone
+`record_manager.c/.h` (1-minute snapshots, 1440-record/24h ring buffer) is **retired** —
+`history_manager` (Phase 5.3) is explicitly the single source of truth for both Chart and Logs,
+so a second ring buffer of the same readings would duplicate that responsibility. Logs should
+read `history_manager_get_samples()` / `_get_range()` instead.
+
+**Open gap:** `history_manager` currently stores only *hourly*-resolution records. If the Logs
+table needs true 1-minute rows (not hourly), a bounded minute-resolution tier should be added
+to `history_manager` itself when this phase starts — not a new standalone module.
 
 **Design spec:**
 - `lv_table` columns: Time | TVOC (ppb) | Temp (°C) | Hum (%) | Status
 - Column widths: 60 / 60 / 52 / 44 / 56 = 272 px total
-- Table fills 436 px content height (nav drawer model, no tab bar); vertical scroll enabled
+- Table fills 430 px content height (nav drawer model); vertical scroll enabled
 - Status cell: coloured text ("GOOD" green / "WARN" amber / "ALARM" red)
-- Data source: new ring buffer of 1-minute averaged sensor records (max 1440 = 24 h)
-
-**Files to create:**
-- `main/data/record_manager.c/.h` — 1-minute averaged sensor record ring buffer
+- Data source: `history_manager` (see gap above re: resolution)
 
 **Files to modify:**
-- `main/ui/screens/screen_logs.c` — Full implementation; `screen_logs_refresh()` rebuilds table rows
-- `main/CMakeLists.txt` — Add record_manager.c
+- `main/ui/screens/screen_logs.c` — Full implementation; `screen_logs_refresh()` rebuilds table
+  rows from `history_manager_get_samples()` / `_get_range()`
+- `main/data/history_manager.c/.h` — only if per-minute resolution is required (see gap above)
 
 **sdkconfig prerequisite:**
 - Verify `CONFIG_LV_USE_TABLE=y`
 
 **Acceptance criteria:**
-- Table shows at least 24 rows (1 per minute of simulated data)
+- Table shows at least 24 rows of history
 - Table scrolls smoothly on swipe
 - Status column colour matches sensor level at record time
 - Navigating away and back re-populates the table via `screen_logs_refresh()`
@@ -881,7 +1388,7 @@ Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallb
 - `main/CMakeLists.txt` — swap sim → hw backend; add driver source files
 
 **Files to create:**
-- `main/sensors/ens160_driver.c/.h` — I2C mode set, TVOC/eCO₂ read, compensation write, validity check
+- `main/sensors/ens160_driver.c/.h` — I2C mode set, TVOC read, compensation write, validity check
 - `main/sensors/aht21_driver.c/.h` — trigger/read/CRC; returns temperature and humidity
 
 **Acceptance criteria:**
@@ -911,19 +1418,19 @@ Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallb
 ### ⬜ Phase 9 — Storage Framework (NVS Log + SD Card Export)
 **Status: PLANNED**
 
-**Goal:** Persist sensor records to NVS flash (short-term) and export to SD card CSV (long-term). Also persist `history_manager` ring buffer state so trend charts survive a reboot.
+**Goal:** Persist `history_manager`'s ring buffer to NVS flash (short-term) and export to SD
+card CSV (long-term) so trend charts and logs survive a reboot.
 
 **Design:**
-- NVS persistence: write 1-minute averaged records to NVS on a 5-minute flush cycle
-- Record limit: 1440 records (24 h in NVS); oldest overwritten when full
+- NVS persistence: flush the hourly ring buffer to NVS on a periodic cycle
 - SD card: optional export button on Data Logs screen writes all records to `/sdcard/ivf_log_YYYYMMDD.csv`
 - SD pins: SDMMC or SPI2 — confirm available GPIOs in `board.h`
 - SNTP time sync: if WiFi available, sync RTC for accurate timestamps
-- `history_manager` NVS persistence: save/restore hourly and daily ring buffers on boot/shutdown
+- `history_manager` NVS persistence: save/restore the ring buffer on boot/shutdown (there is
+  only one buffer to persist now — `record_manager.c` was retired in Phase 5.3)
 
 **Files to modify:**
-- `main/data/record_manager.c` — add NVS flush and restore-on-boot
-- `main/data/history_manager.c` — add NVS persistence of ring buffer state
+- `main/data/history_manager.c` — add NVS/SD persistence of ring buffer state
 - `main/ui/screens/screen_logs.c` — add "Export CSV" button (visible only when SD card detected)
 
 **Files to create:**
@@ -988,7 +1495,7 @@ Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallb
 | `main/ui/components/navigation_drawer/navigation_drawer.h/.c` | ✅ Phase 4.2.6 updated | Full-screen height (480 px, y=0); `DRAWER_HEADER_H=148`; top section (circle+shield+badge+title+pill); `header_title/header_status/footer_version` cfg fields; version footer; `#include "assets.h"` |
 | `main/ui/screens/screen_splash.c/.h` | ✅ Phase 2 complete | Portrait size fix |
 | `main/ui/screens/screen_dashboard.c/.h` | ✅ Phase 4.2.6 complete · **FROZEN** | `header_t` + `card_t` + `voc_gauge_t`; title "DASHBOARD"; sparklines removed; `CARD_H=90`; `build_sensor_card()` simplified |
-| `main/ui/screens/screen_chart.c/.h` | ✅ Phase 4A complete | Period selector, lv_chart, threshold lines, no-data label. Phase 4C (history_manager) and 4D (data binding) follow. |
+| `main/ui/screens/screen_chart.c/.h` | ✅ Phase 5.6 complete · **FROZEN** | `header_t` (frozen) + `card_t` + real bitmap icon assets (Phase 5.4.1); `chart_mode_t` + `apply_chart_mode()` central controller; Last 7 Days (default) / Today (simple 2-row dropdown, Phase 5.6) modes; live `history_manager` data; title shares Row A with the calendar button; mode-aware 4th stat card; real-calendar-date X-axis labels; axis tick labels fixed (removed `clip_corner`); no return chip (dropdown covers it). |
 | `main/ui/screens/screen_logs.c/.h` | ⬜ Stub | Full content Phase 5 (content height 430) |
 | `main/ui/screens/screen_settings.c/.h` | ⬜ Stub | Full content Phase 6 (content height 430) |
 
@@ -998,10 +1505,10 @@ Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallb
 | `main/sensors/sensor_backend.h` | ✅ Phase 3B complete | Backend interface: `sensor_backend_init()` + `sensor_backend_sample()` |
 | `main/sensors/sensor_backend_sim.c` | ✅ Phase 3B complete | Sine-wave simulation — active backend, swap out in Phase 7 |
 | `main/sensors/sensor_backend_hw.c` | ⬜ Phase 7 stub | Real ENS160+AHT21 — fill TODOs in Phase 7 |
-| `main/sensors/sensor_manager.c/.h` | ✅ Phase 3B complete | Pure framework: task, mutex, NVS, public API — calls sensor_backend_* |
+| `main/sensors/sensor_manager.c/.h` | ✅ Phase 5.3 updated | Pure framework: task, mutex, NVS, public API — calls sensor_backend_*; `sensor_task()` also feeds `history_manager_add_sample()` every 60th iteration (Phase 5.3) |
 | `main/data/alarm_manager.c/.h` | ⬜ Pending simplify | Simplify in Phase 5 (remove ring buffer) |
-| `main/data/history_manager.c/.h` | ❌ Not created | Create in Phase 4C |
-| `main/data/record_manager.c/.h` | ❌ Not created | Create in Phase 5 |
+| `main/data/history_manager.c/.h` | ✅ Phase 5.3 complete, API revised Phase 5.4 | 90-day hourly ring buffer (PSRAM, ~59.1 KB with min/max), fed from `sensor_manager.c`; read by `screen_chart.c` since Phase 5.4 (`get_range`/`get_daily_aggregates`/`compute_stats`) |
+| `main/data/record_manager.c/.h` | ⛔ Retired (Phase 5.3) | Superseded by `history_manager` — see Phase 5 note |
 | `main/data/config_manager.c/.h` | ❌ Not created | Create in Phase 6 |
 | `main/sensors/ens160_driver.c/.h` | ❌ Not created | Create in Phase 7 |
 | `main/sensors/aht21_driver.c/.h` | ❌ Not created | Create in Phase 7 |
@@ -1009,7 +1516,7 @@ Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallb
 ### Application
 | File | Status | Notes |
 |------|--------|-------|
-| `main/app_main.c` | ✅ Phase 4.2.7 updated | `ui_refresh_task` removed; `app_main` returns after `ui_init()` |
+| `main/app_main.c` | ✅ Phase 5.3 updated | `ui_refresh_task` removed; `app_main` returns after `ui_init()`; `history_manager_init()` called before `sensor_manager_init()` (Phase 5.3) |
 
 ---
 
@@ -1059,6 +1566,13 @@ Ring buffers allocated from PSRAM (`heap_caps_malloc(MALLOC_CAP_SPIRAM)`), fallb
 | 2026-06-28 | Phase 4.2.5 Dashboard Final Polish (header geometry, right-aligned time/date, title clip, humidity overlap, NO_READING init, MODERATE contrast, nav_drawer.c removed) | ⬜ not yet built — pending user review | 4 files modified; no files created |
 | 2026-06-29 | Phase 4.2.6 Hardware Validation Polish (WiFi far right, SD removed, full-screen drawer, new top section, sparklines removed, DASHBOARD title, improved icons) | ⬜ not yet built — pending flash to device | 7 files modified; no files created |
 | 2026-06-30 | Phase 4.2.7 UI Freeze Fix (`ui_refresh_task` removed, `dash_timer_cb` LVGL timer added, `ui_dashboard_refresh()` removed) | ⬜ pending build + flash | 3 files modified; no files created |
+| 2026-07-01 | Phase 5.1 Chart UI Migration (header_t/card_t migration, pill period selector, calendar button, avg-line area fill via draw-part hook, 5 new drawn icons, illustrative sample data) | ⬜ not yet built — pending build + flash | 2 files modified; no files created |
+| 2026-07-01 | Phase 5.2 Chart Visual Polish (icon legend, chart spacing/background/grid/axis polish, month axis labels, card shadow/spacing match Dashboard, unified 16×16 card icons) | ⬜ not yet built — pending build + flash | 2 files modified; no files created |
+| 2026-07-01 | Phase 5.3 History Manager Backend (`history_manager.c/.h` new; `sensor_manager.c` + `app_main.c` wired; `record_manager.c` retired) | ⬜ not yet built — pending build + flash | 2 files created; 3 files modified |
+| 2026-07-03 | Phase 5.4 Chart Mode Integration & History Binding (period selector removed; `chart_mode_t`/`apply_chart_mode()`; Last 7 Days + Selected Day modes; `history_manager` API revised — `get_range`/`get_daily_aggregates`/`compute_stats`; min/max schema widening) | ⬜ not yet built — pending build + flash | 2 files modified; no files created |
+| 2026-07-03 | Phase 5.4.1 Real Bitmap Icons (5 pre-existing `*_icon.c` bitmap files fixed — hyphen→underscore identifiers — and wired into the build; `assets.c/.h`, `screen_chart.c`, `CMakeLists.txt` updated) | ⬜ not yet built — pending build + flash | 5 files modified (bitmap identifier fix) + `assets.c/.h`, `screen_chart.c`, `CMakeLists.txt`; no files created |
+| 2026-07-06 | Phase 5.5 Real Calendar Date Picker (`lv_list` relative-day rows replaced with a real `lv_calendar` grid bounded to the 90-day retention window; dependency-free Hinnant calendar math; Selected-Day X-axis → fixed 4h ticks; Last-7-Days X-axis → real calendar dates) | ⬜ not yet built — pending build + flash | 1 file modified (`screen_chart.c`); no files created |
+| 2026-07-06 | Phase 5.6 Picker Simplification + Axis Label Fix (calendar-grid picker replaced with a plain Today/7-Days dropdown; `CHART_MODE_SELECTED_DAY` → `CHART_MODE_TODAY`; removed `clip_corner` on `s_chart` which was hiding both axes' tick labels) | ⬜ not yet built — pending build + flash | 1 file modified (`screen_chart.c`); no files created |
 
 ---
 

@@ -11,6 +11,7 @@
 #include "ui/ui.h"
 #include "sensors/sensor_manager.h"
 #include "data/alarm_manager.h"
+#include "data/history_manager.h"
 
 static const char *TAG = "main";
 
@@ -44,6 +45,9 @@ void app_main(void)
 
     /* ── Alarm manager (before sensor_manager calls it) ── */
     ESP_ERROR_CHECK(alarm_manager_init());
+
+    /* ── History manager (before sensor_manager calls it) ── */
+    ESP_ERROR_CHECK(history_manager_init());
 
     /* ── Sensor manager (starts 1 Hz sampling task) ── */
     ESP_ERROR_CHECK(sensor_manager_init());

@@ -44,6 +44,16 @@ void assets_draw_chart_icon  (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_c
 /* Shield icon (28×32 px) — used in navigation drawer header circle */
 void assets_draw_shield      (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color);
 
+/* Chart screen icons — real bitmaps (calendar_icon.c / chart_average_icon.c /
+ * chart_maximum_icon.c / chart_minimum_icon.c / date_range_icon.c), wired up
+ * in place of the Phase 5.1/5.2 drawn-primitive placeholders. Calling
+ * signature is unchanged, so no caller needed to change. */
+void assets_draw_calendar       (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 24×24 — period-row calendar button        */
+void assets_draw_date_range     (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 16×16 — >150ppb Days/Hours stat card      */
+void assets_draw_chart_average  (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 16×16 — legend + AVERAGE stat card        */
+void assets_draw_chart_max      (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 16×16 — legend + MAX stat card            */
+void assets_draw_chart_min      (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 16×16 — MIN stat card                     */
+
 /* -----------------------------------------------------------------------
  * Bitmap image forward declarations (stubs — uncomment when files added)
  *
@@ -64,6 +74,11 @@ LV_IMG_DECLARE(icon_park_solid_log);
 LV_IMG_DECLARE(ant_design_setting_filled);
 LV_IMG_DECLARE(shield);
 LV_IMG_DECLARE(Vector);
+LV_IMG_DECLARE(lets_icons_date_range_fill);   /* calendar_icon.c        — 24×24 */
+LV_IMG_DECLARE(ic_outline_date_range);        /* date_range_icon.c      — 16×16 */
+LV_IMG_DECLARE(carbon_chart_average);         /* chart_average_icon.c   — 16×16 */
+LV_IMG_DECLARE(tdesign_chart_maximum);        /* chart_maximum_icon.c   — 16×16 */
+LV_IMG_DECLARE(tdesign_chart_minimum);        /* chart_minimum_icon.c   — 16×16 */
 
 /* LV_IMG_DECLARE(img_leaf);           */
 /* LV_IMG_DECLARE(img_thermometer);    */

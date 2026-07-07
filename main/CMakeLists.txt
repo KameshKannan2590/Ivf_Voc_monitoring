@@ -16,6 +16,7 @@ idf_component_register(
         "sensors/sensor_backend_sim.c"      # simulation: comment out for real HW
         # "sensors/sensor_backend_hw.c"     # real HW:   uncomment for Phase 7
         "data/alarm_manager.c"
+        "data/history_manager.c"    # Phase 5.3 — history backend (LVGL/UI independent)
         # ── Phase 4.1 — Shared UI components ──────────────────────────────────
         "ui/assets/assets.c"
         "ui/assets/menu_burger_horizontal_bold.c"
@@ -28,6 +29,12 @@ idf_component_register(
         "ui/assets/setting_icon.c"
         "ui/assets/shield_icon.c"
         "ui/assets/wifi_icon.c"
+        # ── Chart screen icons — real bitmaps (Phase 5.4.1) ────────────────────
+        "ui/assets/calendar_icon.c"
+        "ui/assets/date_range_icon.c"
+        "ui/assets/chart_average_icon.c"
+        "ui/assets/chart_maximum_icon.c"
+        "ui/assets/chart_minimum_icon.c"
         "ui/components/status_badge/status_badge.c"
         "ui/components/icon_button/icon_button.c"
         "ui/components/card/card.c"

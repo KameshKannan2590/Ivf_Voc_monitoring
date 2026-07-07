@@ -1,6 +1,7 @@
 #include "sensor_manager.h"
 #include "sensor_backend.h"
 #include "data/alarm_manager.h"
+#include "data/history_manager.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -29,6 +30,8 @@ static void sensor_task(void *arg)
 {
     ESP_LOGI(TAG, "Sensor task running");
 
+    uint32_t history_tick = 0;   /* decimates the 1 Hz loop to ~1 sample/minute */
+
     while (1) {
         sensor_data_t fresh = {0};
         sensor_backend_sample(&fresh);
@@ -39,6 +42,12 @@ static void sensor_task(void *arg)
 
         /* Feed alarm manager */
         alarm_manager_check(&fresh);
+
+        /* Feed history manager (Phase 5.3) — skip on a sensor fault so a
+         * comms error doesn't record a false 0.0 reading into history. */
+        if (++history_tick % 60 == 0 && fresh.sensor_ok) {
+            history_manager_add_sample(fresh.voc_ppb, fresh.temperature_c, fresh.humidity_pct);
+        }
 
         vTaskDelay(pdMS_TO_TICKS(1000));   /* 1 Hz sampling */
     }
