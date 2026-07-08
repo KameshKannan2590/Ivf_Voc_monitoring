@@ -6,12 +6,14 @@
 #include "nvs_flash.h"
 
 #include "display/display_driver.h"
+#include "display/display_power.h"
 #include "touch/touch_driver.h"
 #include "lvgl_port/lvgl_port.h"
 #include "ui/ui.h"
 #include "sensors/sensor_manager.h"
 #include "data/alarm_manager.h"
 #include "data/history_manager.h"
+#include "data/config_manager.h"
 
 static const char *TAG = "main";
 
@@ -32,6 +34,10 @@ void app_main(void)
     }
     ESP_ERROR_CHECK(nvs_ret);
 
+    /* ── Settings persistence (before anything that reads a threshold or
+     * brightness value) ── */
+    ESP_ERROR_CHECK(config_manager_init());
+
     /* ── Display ── */
     esp_lcd_panel_handle_t panel = NULL;
     ESP_ERROR_CHECK(display_driver_init(&panel));
@@ -42,6 +48,9 @@ void app_main(void)
 
     /* ── LVGL port (registers display + touch, starts LVGL task) ── */
     ESP_ERROR_CHECK(lvgl_port_init(panel, tp));
+
+    /* ── Screen dim/wake/timeout (after display + config_manager) ── */
+    display_power_init();
 
     /* ── Alarm manager (before sensor_manager calls it) ── */
     ESP_ERROR_CHECK(alarm_manager_init());

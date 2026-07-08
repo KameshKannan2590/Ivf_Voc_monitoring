@@ -42,6 +42,15 @@ esp_err_t alarm_manager_init(void);
 void alarm_manager_check(const sensor_data_t *data);
 
 /**
+ * Re-reads the VOC alarm (critical) threshold from config_manager and
+ * applies it immediately, without a reboot. Call after the Settings
+ * screen saves a new "High Alert Threshold" value — this is the value
+ * that actually gates ALARM_VOC_HIGH, distinct from sensor_manager's copy
+ * of the same setting (used only for dashboard/gauge color coding).
+ */
+void alarm_manager_reload_thresholds(void);
+
+/**
  * Returns number of currently active (unacknowledged) alarms.
  */
 int alarm_manager_active_count(void);

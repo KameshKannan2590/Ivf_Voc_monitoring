@@ -268,8 +268,16 @@ void header_set_sd_status(header_t *hdr, sd_status_t status)
 
     switch (status) {
     case SD_STATUS_ABSENT:
+        /* Full opacity, not a low-opacity blend (was LV_OPA_30) — img_recolor_opa
+         * blends the recolor color WITH the bitmap's own native baked-in pixels
+         * (dark/black for this glyph), so at only 30% the original dark pixels
+         * dominated regardless of theme. That read as "muted grey" by accident
+         * against Light's white header, but was indistinguishable from the dark
+         * theme's dark header background — the icon effectively disappeared/
+         * looked wrong. Full opacity makes the theme-aware muted color fully
+         * replace the bitmap's color, correct in both themes. */
         col = IVF_COLOR_TEXT_MUTED;
-        opa = LV_OPA_30;
+        opa = LV_OPA_COVER;
         break;
     case SD_STATUS_PRESENT:
         col = IVF_COLOR_TEXT_MUTED;

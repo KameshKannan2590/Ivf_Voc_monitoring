@@ -119,6 +119,19 @@ uint16_t history_manager_get_range(uint32_t from_ts, uint32_t to_ts,
                                     history_record_t *out, uint16_t max_count);
 
 /**
+ * Copy up to `count` hourly records, most-recent-first (out[0] = newest),
+ * skipping the newest `skip` records first — e.g. skip=0 for the first
+ * page, skip=10 for the next-older page of 10, etc. Returns the number of
+ * records actually copied, which is less than `count` once the tail of
+ * stored history is reached (0 once `skip` runs past everything stored).
+ * O(count) — walks the ring buffer backward from the newest write, unlike
+ * get_range()'s O(stored count) forward scan. Built for the Logs screen's
+ * "Load More" pagination (Phase 5.8).
+ */
+uint16_t history_manager_get_latest_n(uint16_t skip, uint16_t count,
+                                       history_record_t *out);
+
+/**
  * Copy up to `max_days` daily rollups into `out`, ordered oldest-to-newest.
  * Each output record aggregates the hourly records falling into one
  * 24-hour bucket counting backward from `to_ts` (bucket 0 = the 24h ending

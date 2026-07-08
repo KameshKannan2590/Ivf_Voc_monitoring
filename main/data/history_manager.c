@@ -169,6 +169,23 @@ uint16_t history_manager_get_range(uint32_t from_ts, uint32_t to_ts,
     return copied;
 }
 
+uint16_t history_manager_get_latest_n(uint16_t skip, uint16_t count, history_record_t *out)
+{
+    if (!s_hourly || !out || count == 0) return 0;
+
+    xSemaphoreTake(s_mutex, portMAX_DELAY);
+    uint16_t available = (skip < s_count) ? (uint16_t)(s_count - skip) : 0;
+    uint16_t n = (count < available) ? count : available;
+    for (uint16_t i = 0; i < n; i++) {
+        /* Newest valid entry sits at (s_head - 1); walk backward from there. */
+        uint16_t idx = (uint16_t)((s_head + HISTORY_HOURLY_CAPACITY - 1 - skip - i) % HISTORY_HOURLY_CAPACITY);
+        out[i] = s_hourly[idx];
+    }
+    xSemaphoreGive(s_mutex);
+
+    return n;
+}
+
 uint16_t history_manager_get_daily_aggregates(uint32_t from_ts, uint32_t to_ts,
                                                history_record_t *out, uint16_t max_days)
 {

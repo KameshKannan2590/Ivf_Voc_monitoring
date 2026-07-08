@@ -2,6 +2,7 @@
 #include "sensor_backend.h"
 #include "data/alarm_manager.h"
 #include "data/history_manager.h"
+#include "data/config_manager.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -53,23 +54,33 @@ static void sensor_task(void *arg)
     }
 }
 
-/* --- NVS helpers --- */
-static void load_thresholds_from_nvs(void)
+/* --- NVS helpers ---
+ * VOC thresholds are owned by config_manager (Phase 6) since the Settings
+ * screen writes them — reading through the same module avoids two paths
+ * to the same "voc_warn"/"voc_alarm" NVS keys. Temp/humidity thresholds
+ * have no Settings UI yet, so they still read NVS directly, unchanged. */
+static void load_thresholds(void)
 {
+    s_voc_warn_ppb  = (float)config_manager_get_voc_warn_ppb();
+    s_voc_alarm_ppb = (float)config_manager_get_voc_alarm_ppb();
+
     nvs_handle_t h;
-    if (nvs_open("ivf_cfg", NVS_READONLY, &h) != ESP_OK) return;
+    if (nvs_open("ivf_cfg", NVS_READONLY, &h) == ESP_OK) {
+        int32_t v;
+        if (nvs_get_i32(h, "tmp_warn",  &v) == ESP_OK) s_temp_warn_c   = (float)v / 10.0f;
+        if (nvs_get_i32(h, "tmp_alarm", &v) == ESP_OK) s_temp_alarm_c  = (float)v / 10.0f;
+        if (nvs_get_i32(h, "hum_lo",    &v) == ESP_OK) s_hum_low_warn  = (float)v;
+        if (nvs_get_i32(h, "hum_hi",    &v) == ESP_OK) s_hum_high_warn = (float)v;
+        nvs_close(h);
+    }
 
-    int32_t v;
-    if (nvs_get_i32(h, "voc_warn",  &v) == ESP_OK) s_voc_warn_ppb  = (float)v;
-    if (nvs_get_i32(h, "voc_alarm", &v) == ESP_OK) s_voc_alarm_ppb = (float)v;
-    if (nvs_get_i32(h, "tmp_warn",  &v) == ESP_OK) s_temp_warn_c   = (float)v / 10.0f;
-    if (nvs_get_i32(h, "tmp_alarm", &v) == ESP_OK) s_temp_alarm_c  = (float)v / 10.0f;
-    if (nvs_get_i32(h, "hum_lo",    &v) == ESP_OK) s_hum_low_warn  = (float)v;
-    if (nvs_get_i32(h, "hum_hi",    &v) == ESP_OK) s_hum_high_warn = (float)v;
-
-    nvs_close(h);
-    ESP_LOGI(TAG, "Loaded thresholds from NVS: VOC warn=%.0f alarm=%.0f",
+    ESP_LOGI(TAG, "Loaded thresholds: VOC warn=%.0f alarm=%.0f",
              s_voc_warn_ppb, s_voc_alarm_ppb);
+}
+
+void sensor_manager_reload_thresholds(void)
+{
+    load_thresholds();
 }
 
 /* --- Public API --- */
@@ -78,7 +89,7 @@ esp_err_t sensor_manager_init(void)
     s_mutex = xSemaphoreCreateMutex();
     if (!s_mutex) return ESP_ERR_NO_MEM;
 
-    load_thresholds_from_nvs();
+    load_thresholds();
     sensor_backend_init();
 
     memset(&s_data, 0, sizeof(s_data));

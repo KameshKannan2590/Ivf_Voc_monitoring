@@ -47,6 +47,15 @@ esp_err_t sensor_manager_init(void);
 void sensor_manager_get_data(sensor_data_t *out);
 
 /**
+ * Re-reads the VOC warn/alarm thresholds from config_manager and applies
+ * them immediately, without a reboot. Call after the Settings screen saves
+ * a new "TVOC Alert Threshold" / "High Alert Threshold" value. Resolves
+ * TD-11 for VOC specifically; temperature/humidity thresholds still load
+ * once at boot only.
+ */
+void sensor_manager_reload_thresholds(void);
+
+/**
  * Classify VOC level against current thresholds.
  */
 sensor_level_t sensor_get_voc_level(float voc_ppb);

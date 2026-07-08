@@ -1,4 +1,5 @@
 #include "alarm_manager.h"
+#include "config_manager.h"
 
 #include "freertos/FreeRTOS.h"
 #include "freertos/semphr.h"
@@ -22,8 +23,14 @@ static SemaphoreHandle_t s_mutex = NULL;
 static int s_debounce[ALARM_TYPE_COUNT] = {0};
 static bool s_active_state[ALARM_TYPE_COUNT] = {false};
 
-/* --- Default thresholds (mirror sensor_manager, only compared here) --- */
-#define VOC_ALARM_PPB   500.0f
+/* --- Thresholds ---
+ * VOC alarm threshold is runtime-configurable (Phase 6, config_manager) —
+ * it's the real critical-alert trigger point behind Settings' "High Alert
+ * Threshold" control, deliberately the SAME "voc_alarm" NVS value
+ * sensor_manager reads (that one's for gauge color coding only; this one
+ * actually raises ALARM_VOC_HIGH). Temp/humidity have no Settings UI yet,
+ * so they stay fixed constants for now. */
+static float s_voc_alarm_ppb = 500.0f;
 #define TEMP_HIGH_C     28.0f
 #define TEMP_LOW_C      18.0f
 #define HUM_HIGH_PCT    65.0f
@@ -72,8 +79,15 @@ esp_err_t alarm_manager_init(void)
     s_mutex = xSemaphoreCreateMutex();
     if (!s_mutex) return ESP_ERR_NO_MEM;
     memset(s_history, 0, sizeof(s_history));
-    ESP_LOGI(TAG, "Alarm manager initialized");
+    s_voc_alarm_ppb = (float)config_manager_get_voc_alarm_ppb();
+    ESP_LOGI(TAG, "Alarm manager initialized (VOC alarm threshold=%.0f)", s_voc_alarm_ppb);
     return ESP_OK;
+}
+
+void alarm_manager_reload_thresholds(void)
+{
+    s_voc_alarm_ppb = (float)config_manager_get_voc_alarm_ppb();
+    ESP_LOGI(TAG, "VOC alarm threshold reloaded: %.0f", s_voc_alarm_ppb);
 }
 
 void alarm_manager_check(const sensor_data_t *data)
@@ -86,8 +100,8 @@ void alarm_manager_check(const sensor_data_t *data)
         check_threshold(ALARM_SENSOR_ERROR, true, 0.0f, 0.0f);
     } else {
         check_threshold(ALARM_SENSOR_ERROR, false, 0.0f, 0.0f);
-        check_threshold(ALARM_VOC_HIGH,     data->voc_ppb       >= VOC_ALARM_PPB,
-                        data->voc_ppb,       VOC_ALARM_PPB);
+        check_threshold(ALARM_VOC_HIGH,     data->voc_ppb       >= s_voc_alarm_ppb,
+                        data->voc_ppb,       s_voc_alarm_ppb);
         check_threshold(ALARM_TEMP_HIGH,    data->temperature_c >= TEMP_HIGH_C,
                         data->temperature_c, TEMP_HIGH_C);
         check_threshold(ALARM_TEMP_LOW,     data->temperature_c <= TEMP_LOW_C,

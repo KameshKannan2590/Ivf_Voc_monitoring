@@ -2,6 +2,8 @@
 #include "assets.h"
 #include "components/navigation_drawer/navigation_drawer.h"
 #include "lvgl_port/lvgl_port.h"
+#include "display/display_power.h"
+#include "data/config_manager.h"
 
 #include "screens/screen_splash.h"
 #include "screens/screen_dashboard.h"
@@ -20,6 +22,22 @@ static lv_obj_t            *s_screens[SCREEN_COUNT];
 static screen_id_t          s_current    = SCREEN_SPLASH;
 static navigation_drawer_t *s_nav_drawer = NULL;
 static lv_timer_t          *s_dash_timer = NULL;
+static lv_timer_t          *s_power_timer = NULL;
+
+/* ── Theme (Phase 6.1) ─────────────────────────────────────────────────────
+ * Loaded once at the top of ui_init(), before any screen is built, since
+ * every screen reads these colors exactly once while constructing its
+ * widgets. See ui.h for why a theme change needs a reboot to apply. */
+static bool s_dark_mode = false;
+
+lv_color_t ivf_color_bg(void)           { return s_dark_mode ? lv_color_hex(0x121212) : lv_color_hex(0xFFFFFF); }
+lv_color_t ivf_color_card(void)         { return s_dark_mode ? lv_color_hex(0x1E1E1E) : lv_color_hex(0xFFFFFF); }
+lv_color_t ivf_color_border(void)       { return s_dark_mode ? lv_color_hex(0x333333) : lv_color_hex(0xE0E0E0); }
+lv_color_t ivf_color_text(void)         { return s_dark_mode ? lv_color_hex(0xECECEC) : lv_color_hex(0x212121); }
+lv_color_t ivf_color_text_muted(void)   { return s_dark_mode ? lv_color_hex(0x9E9E9E) : lv_color_hex(0x757575); }
+lv_color_t ivf_color_nav(void)          { return s_dark_mode ? lv_color_hex(0x1A1A1A) : lv_color_hex(0xF8F9FA); }
+lv_color_t ivf_color_nav_active(void)   { return s_dark_mode ? lv_color_hex(0x0D3D73) : lv_color_hex(0xE8F0FE); }
+lv_color_t ivf_color_nav_inactive(void) { return s_dark_mode ? lv_color_hex(0x707070) : lv_color_hex(0x9E9E9E); }
 
 static lv_style_t s_style_screen;
 static lv_style_t s_style_card;
@@ -115,11 +133,26 @@ static void dash_timer_cb(lv_timer_t *t)
     dashboard_set_time(time_buf);
 }
 
+/* ── Screen dim/wake/timeout tick (Phase 6) — runs inside lv_timer_handler,
+ * same context lvgl_port's touch callback runs in, so no locking needed
+ * between display_power's internal state and the touch-swallow check
+ * there. 500 ms is frequent enough that hitting a configured timeout of
+ * 15 s is never off by more than half a second. */
+
+static void power_timer_cb(lv_timer_t *t)
+{
+    (void)t;
+    display_power_tick();
+}
+
 /* ── Navigation ─────────────────────────────────────────────────── */
 
 void ui_init(void)
 {
     ESP_LOGI(TAG, "Building UI");
+
+    s_dark_mode = config_manager_get_dark_mode();
+    ESP_LOGI(TAG, "Theme: %s", s_dark_mode ? "Dark" : "Light");
 
     lvgl_port_lock(0);
 
@@ -151,6 +184,9 @@ void ui_init(void)
 
     /* 1 Hz sensor + clock refresh — fires inside lv_timer_handler, no mutex needed */
     s_dash_timer = lv_timer_create(dash_timer_cb, 1000, NULL);
+
+    /* Screen dim/wake/timeout — see display_power.c (Phase 6) */
+    s_power_timer = lv_timer_create(power_timer_cb, 500, NULL);
 
     lvgl_port_unlock();
 

@@ -2,6 +2,8 @@
 
 #include "esp_lcd_panel_ops.h"
 #include "esp_err.h"
+#include <stdbool.h>
+#include <stdint.h>
 
 #ifdef __cplusplus
 extern "C" {
@@ -42,9 +44,13 @@ extern "C" {
 esp_err_t display_driver_init(esp_lcd_panel_handle_t *out_panel);
 
 /**
- * Turn display backlight on or off.
+ * Set display backlight brightness via LEDC PWM, 0-100 (%). 0 is fully off,
+ * not just dim — there is no separate on/off API; callers that just want
+ * "off" pass 0, "on" pass whatever brightness they want restored to.
+ * Values above 100 are clamped. Lazily initializes the LEDC timer/channel
+ * on GPIO LCD_BL_GPIO the first time it's called.
  */
-void display_set_backlight(bool on);
+void display_set_brightness(uint8_t percent);
 
 #ifdef __cplusplus
 }

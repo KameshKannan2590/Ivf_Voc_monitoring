@@ -7,6 +7,7 @@
 #include "esp_timer.h"
 #include "esp_log.h"
 #include "display/display_driver.h"
+#include "display/display_power.h"
 
 #include "lvgl.h"
 #include "esp_heap_caps.h"
@@ -49,7 +50,21 @@ static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
     xpt2046_handle_t *tp = (xpt2046_handle_t *)drv->user_data;
 
     uint16_t x = 0, y = 0;
-    if (touch_driver_read(tp, &x, &y)) {
+    bool pressed = touch_driver_read(tp, &x, &y);
+
+    if (pressed && display_power_is_dimmed()) {
+        /* This is the touch that wakes a dimmed screen — consume it
+         * entirely (report released) rather than letting it also act on
+         * whatever widget is underneath, same pattern as a phone lock
+         * screen. The user has to tap again, on the now-lit screen, to
+         * actually interact. */
+        display_power_wake();
+        data->state = LV_INDEV_STATE_RELEASED;
+        return;
+    }
+
+    if (pressed) {
+        display_power_notify_touch();
         /* touch_driver_read: *x = portrait_Y (0-479), *y = portrait_X (0-271).
          * LVGL ROT_NONE 272x480 expects point.x = portrait_X, point.y = portrait_Y. */
         data->point.x = (lv_coord_t)y;

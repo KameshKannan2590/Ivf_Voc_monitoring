@@ -4,7 +4,7 @@
 **Hardware:** Elecrow CrowPanel ESP32-S3 4.3" HMI (SKU: DIS06043H, v2.1)  
 **Framework:** ESP-IDF 5.3.1 (pure — no Arduino layer)  
 **UI:** LVGL 8.4.0 (managed component, `idf_component.yml` pins `>=8.3.0, <9.0.0`)  
-**Version:** 1.0.0 — Phase 4B (Nav Drawer) complete · Phase 4.1 (Shared UI Framework) complete · Phase 4.2.6 (Hardware Validation Polish) complete · Dashboard FROZEN · UI freeze resolved — LVGL-timer dashboard refresh · Phase 5.1 (Chart UI Migration) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · **Chart screen FROZEN**
+**Version:** 1.0.0 — Phase 4B (Nav Drawer) complete · Phase 4.1 (Shared UI Framework) complete · Phase 4.2.6 (Hardware Validation Polish) complete · Dashboard FROZEN · UI freeze resolved — LVGL-timer dashboard refresh · Phase 5.1 (Chart UI Migration) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · Chart screen FROZEN · Phase 5.8 (Logs Screen) complete · Logs screen FROZEN (Phase 5.9) · Phase 6 (Settings Screen + Brightness/Timeout) complete · **Phase 6.1 (Font Size, Brightness Floor, Light/Dark Theme) complete**
 
 ---
 
@@ -728,27 +728,270 @@ static illustrative sample data (TD-14) until this is implemented.
 - No `sensor_manager.c` or `CMakeLists.txt` changes needed — Phase 5.3 already wired the write
   path and build
 
-### Screen: Logs (272 × 480 portrait) — Phase 5 stub
+### Screen: Logs (272 × 480 portrait) — Phase 5.9 complete · **FROZEN**
+
+#### Architecture
+
+Same "pure display layer" principle as Chart: `screen_logs.c` reads `history_manager.c`
+through two calls and never touches sensor state or storage directly.
+
 ```
-┌── Header 272×44 ───────────────────────────┐
-│              DATA LOGS                     │
-├── Content 272×436 ─────────────────────────┤
-│  [empty — Phase 5]                         │
-│                                            │
-│ [≡]                                        │  ← floating nav button (lv_layer_top)
-└────────────────────────────────────────────┘
+screen_logs.c: logs_load_page() ─┬─ history_manager_get_latest_n(skip, 10, buf)  ──► history_manager.c
+                                  └─ history_manager_get_count_in_range(0, now)      90-day hourly ring buffer
+                                                                                     (Phase 5.3, unchanged)
+
+screen_logs.c: calendar_util_format_datetime() ──► data/calendar_util.c (Phase 5.8, new, shared)
 ```
 
-### Screen: Settings (272 × 480 portrait) — Phase 6 stub
+**Widget hierarchy:**
 ```
-┌── Header 272×44 ───────────────────────────┐
-│               SETTINGS                     │
-├── Content 272×436 ─────────────────────────┤
-│  [empty — Phase 6]                         │
-│                                            │
-│ [≡]                                        │  ← floating nav button (lv_layer_top)
-└────────────────────────────────────────────┘
+screen_logs (lv_obj, 272×480)
+├── header_t (header_create, title "LOGS")                        y=0,  h=50
+└── content  (lv_obj, 272×430)                                    y=50
+    ├── top bar (card_t, 256×40)                                  y=8,  x=8
+    │   ├── assets_draw_datalog_icon() (18×18) + "Total record: N"
+    │   └── "⬆ Export CSV" button (blue, placeholder — see below)
+    ├── table card (card_t, 256×330, pad=0)                       y=58, x=8
+    │   ├── header row: "DATE & TIME" / "TVOC(ppb)" / "TEMP(C)" / "HUM(%)"
+    │   └── rows container (scrollable, flex column, 256×304)
+    │       └── one row per history_record_t: coloured dot (green/orange vs
+    │           VOC_WARNING_THRESHOLD_PPB) + date/time + tvoc + temp + hum,
+    │           bottom-border divider
+    └── "Load More ⌄" (centred, blue) — hidden once all loaded rows are
+        shown or LOGS_MAX_LOADED_ROWS (100) is hit
+
+[≡] menu button — inside header_t, same as every other screen
 ```
+
+**Pagination model:** `history_manager_get_latest_n(skip, count, out)` (new API, Phase
+5.8) returns the `count` most recent records *newest-first*, skipping the newest `skip`
+first — an O(count) backward walk from the ring buffer's write head, not a scan of the
+whole buffer. The screen fetches 10 at a time: `screen_logs_create()`/
+`screen_logs_refresh()` both reset to `skip=0` and load page 1 fresh (same "always reset
+on screen entry" policy as Chart's default mode); "Load More" fetches the next 10 with
+the running `skip` and appends them to the scrollable rows container (flex-column layout
+— each new row just becomes the next flex item, no manual y-bookkeeping).
+
+**Row resolution:** each row is one **hourly** `history_record_t`, not a raw per-minute
+sample. `history_manager` only stores hourly aggregates (TD-16) — storing 90 days at
+per-minute resolution would need ~2.5 MB (129,600 records), more than this board's total
+2 MB PSRAM, so hourly rows are the only resolution that fits in memory. This is a
+deliberate, load-bearing design constraint, not an oversight — see TD-16 (updated).
+
+**Date/time formatting:** boot-relative `timestamp_s` → "24 May, 8:25 AM" via
+`calendar_util.c` (Phase 5.8), a new shared module extracted specifically so Logs would
+not need to duplicate Chart's private calendar math. **Chart's own copy is deliberately
+left untouched** (Chart is FROZEN, Phase 5.7) — see TD-20 for the follow-up to
+de-duplicate once Chart is unfrozen.
+
+**Export CSV — placeholder only.** No SD/flash export infrastructure exists yet (Phase 9:
+`data/sd_export.c/.h`, still `⬜ PLANNED`), so the button matches the design visually but
+its click handler only logs a debug message. See TD-21.
+
+#### What's done
+
+- Header (shared `header_t`, unchanged), top bar (icon + live total-record count + Export CSV
+  placeholder), table (header row + scrollable rows), "Load More" pagination, status dots,
+  90-day/oldest-dropped retention (free, from the existing `history_manager` ring buffer),
+  column layout/margin/overflow fixes (see WORKLOG.md follow-ups).
+- Reads exclusively through `history_manager`'s public API — no direct sensor or storage access.
+- Visually verified column math is now computed from real label widths (`lv_obj_align_to` +
+  `lv_obj_get_x`), not guessed offsets — the class of bug that caused the last two rounds of
+  overlap/clipping fixes should not recur for these four columns.
+
+#### What's pending — open questions (not yet decided, tracked here rather than guessed at)
+
+These aren't bugs or TODOs with an obvious answer — they're product/behaviour questions this
+implementation deliberately did **not** resolve on its own, because the answer depends on
+requirements not yet given:
+
+- **Live refresh while the screen is open.** `screen_logs_refresh()` only runs when the user
+  *navigates to* the Logs screen (`ui_goto_screen()`'s existing hook) — there is no periodic
+  tick while the user stays on it. If a new hourly record lands while they're looking at the
+  list, it will not appear until they leave and come back. Is that acceptable, or does Logs
+  need a live/auto-refresh (and if so, on what cadence, and should it preserve scroll
+  position / loaded page count, or reset like re-entering does today)?
+- **What event should produce a log row.** Today a row is produced once per hour purely because
+  that's `history_manager`'s storage granularity (TD-16) — there is no concept of an
+  event-driven row (e.g., "log immediately when VOC crosses the alarm threshold" or "log on
+  every alarm state change"). `history_record_t.alarm_state` already exists as a field but is
+  hardcoded to 0 everywhere (reserved for Phase 8 `alarm_manager` integration) — whether
+  alarm events should ever produce their *own* out-of-band log rows, distinct from the regular
+  hourly cadence, hasn't been decided.
+- **When real data starts.** The active sensor backend is still `sensor_backend_sim.c`
+  (simulated), not real hardware (`sensor_backend_hw.c` is a Phase 7 stub) — every row shown
+  today, and for however long Phase 7 remains undone, is simulated, not measured, TVOC/temp/
+  humidity. Nothing about the Logs screen changes when real hardware lands (it just reads
+  `history_manager`, which is backend-agnostic), but it's worth being explicit that "the Logs
+  screen works" today does not mean "the numbers in it are real."
+- **Whether 90-day/hourly is the right retention/resolution forever**, or a future requirement
+  (e.g., regulatory record-keeping) demands something else — flagged, not answered, by TD-16.
+
+### Screen: Settings (272 × 480 portrait) — Phase 6 complete
+
+#### Architecture
+
+```
+screen_settings.c ──┬── data/config_manager.c  (persists every setting to NVS "ivf_cfg")
+                     ├── display/display_driver.c  (display_set_brightness() — live preview)
+                     ├── display/display_power.c   (reload_settings() — live timeout/brightness apply)
+                     ├── sensors/sensor_manager.c  (reload_thresholds() — VOC warn/alarm)
+                     └── data/alarm_manager.c      (reload_thresholds() — VOC alarm, real trigger point)
+```
+
+**Widget hierarchy** (unlike Dashboard/Chart/Logs, this screen's content scrolls — there are
+more rows than fit in 430 px with Alert Settings expanded, its default state):
+```
+screen_settings (lv_obj, 272×480)
+├── header_t (title "SETTINGS")                                   y=0,  h=50
+└── content (lv_obj, 272×430, scrollable, flex-column, pad=8/gap=8) y=50
+    ├── Brightness (card_t): "Brightness" + live "%" label, lv_slider below
+    ├── rows card (card_t, pad=0, flex-column):
+    │   ├── Theme — "Light  >" — display-only placeholder, not clickable
+    │   ├── Screen Timeout — opens picker {15 sec, 30 sec, 45 sec, 1 min, None}
+    │   ├── Threshold (ppb) — opens picker {0, 250, 500, 750, 1000}
+    │   └── TVOC High Threshold — opens picker {0, 250, 500, 750, 1000}
+    └── Alert Settings card (collapsible, default expanded):
+        ├── header (pink bg, bell icon, tap toggles s_alert_content HIDDEN)
+        └── s_alert_content (flex-column, reflows automatically on collapse):
+            ├── TVOC Alert Threshold + subtitle — picker {0,250,500,750,1000}
+            └── High Alert Threshold + subtitle — picker {0,250,500,750,1000}
+
++ one shared value-picker overlay (backdrop + panel), reused by every
+  dropdown-style row above — same "Today/7-Days" overlay pattern Chart
+  established, generalized to N labelled options.
+```
+
+**Why a single generic picker, not `lv_dropdown`:** no dropdown/slider/roller component
+existed anywhere in this codebase before this phase (confirmed by search). Rather than
+introduce `lv_dropdown` — a different interaction/visual style from anything else in the
+app — the picker reuses Chart's existing "tap a row → centered overlay list of options"
+pattern, so this screen looks and behaves consistently with the rest of the app.
+
+#### Two independent VOC threshold pairs — a pre-existing architecture quirk, now unified
+
+Before this phase, `sensor_manager.c` and `alarm_manager.c` each had their **own**,
+disconnected copy of "the VOC alarm threshold": `sensor_manager`'s `s_voc_warn_ppb`/
+`s_voc_alarm_ppb` (loaded from NVS keys `"voc_warn"`/`"voc_alarm"`, used only for
+`sensor_get_voc_level()` — Dashboard/Chart gauge color classification) and
+`alarm_manager`'s `VOC_ALARM_PPB` (a hardcoded `#define`, used only to actually raise
+`ALARM_VOC_HIGH`). They happened to share the same default (500) but were never wired
+together — changing one could never have affected the other, with or without a Settings
+screen. This phase fixes that for the critical tier:
+
+- **"TVOC Alert Threshold"** (warning) → `config_manager_set_voc_warn_ppb()` →
+  `sensor_manager_reload_thresholds()`. Affects gauge/level color classification only —
+  there is no independent "warning" concept in `alarm_manager` (it has exactly one VOC
+  alarm type, `ALARM_VOC_HIGH`), so this does not by itself raise or clear an alarm.
+- **"High Alert Threshold"** (critical) → `config_manager_set_voc_alarm_ppb()` →
+  **both** `sensor_manager_reload_thresholds()` **and** `alarm_manager_reload_thresholds()`.
+  This is the real, end-to-end critical-alarm trigger point — `alarm_manager.c`'s
+  `VOC_ALARM_PPB` `#define` was replaced with a runtime `s_voc_alarm_ppb`, initialized
+  from `config_manager` at boot and reloadable live.
+
+Both reload functions resolve TD-11 ("Settings save requires a reboot to take effect")
+for VOC specifically — temperature/humidity thresholds have no Settings UI yet and still
+require a reboot.
+
+**Default value change:** the pre-Settings warning default was 150 ppb, which doesn't fall
+on the `{0, 250, 500, 750, 1000}` dropdown this screen exposes. `config_manager`'s default
+for a **fresh/erased** NVS is 250 (the nearest allowed value) — anyone with an existing
+`"voc_warn"=150` in NVS keeps that value; only a clean install sees the new default.
+
+#### "Threshold (ppb)" / "TVOC High Threshold" — persisted, not yet consumed
+
+These two values (display-range reference marker and max-scale) are saved via
+`config_manager` and shown correctly in the UI, but **nothing reads them yet** — their
+only plausible consumers are Dashboard's gauge and Chart's Y-axis, both of which are
+FROZEN (Phase 4.2.6 / Phase 5.7). Wiring them in requires an explicit decision to unfreeze
+one or both screens; until then they're inert. See TD-25.
+
+#### Screen dim / wake / timeout (`display/display_power.c`, new)
+
+- **Brightness**: real backlight control via LEDC PWM on `LCD_BL_GPIO` (was a plain GPIO
+  on/off toggle before this phase — `display_set_backlight(bool)` is gone, replaced by
+  `display_set_brightness(uint8_t percent)`). The slider applies brightness live on every
+  drag tick; it's only persisted to NVS on release.
+- **Timeout**: a 500 ms `lv_timer` (`ui.c`) calls `display_power_tick()`, which dims the
+  backlight to `CONFIG_DIM_BRIGHTNESS_PCT` (15% — see Phase 6.1 below) once `config_manager`'s
+  configured timeout elapses with no touch activity. `CONFIG_TIMEOUT_NONE` (0, "None")
+  disables dimming outright.
+- **Alarm gate**: `display_power_tick()` checks `alarm_manager_active_count()` every tick —
+  while it's non-zero the screen never dims (and un-dims immediately if it already had),
+  and the idle clock keeps resetting so the timeout counts from when the alarm clears, not
+  from whenever the user last touched the screen before it fired.
+- **Wake-on-touch, consumed**: `lvgl_port.c`'s touch read callback checks
+  `display_power_is_dimmed()` before reporting a press to LVGL. If dimmed, that touch only
+  calls `display_power_wake()` (restores brightness, resets the idle clock) and reports
+  `LV_INDEV_STATE_RELEASED` for that cycle — the press never reaches any widget. The user
+  taps once to wake, again to actually interact (phone-lock-screen pattern), avoiding
+  accidental actions the instant the screen lights back up.
+
+#### Phase 6.1 — Font Size, Brightness Floor, Light/Dark Theme
+
+Three follow-up refinements to Phase 6:
+
+**Uniform 12 px body text.** Every label on the Settings screen (Brightness, Theme, Screen
+Timeout, the four ppb-threshold rows, the picker overlay) now uses `IVF_FONT_SMALL` — was a
+mix of `IVF_FONT_NORMAL` (16 px) and `IVF_FONT_SMALL` (12 px). The header (`header_t`) is
+unaffected — it's a separate, unmodified shared component.
+
+**Brightness floor raised to 15%** (`CONFIG_DIM_BRIGHTNESS_PCT`, was 5%) — at 5% the backlight
+risked being dark enough that the user couldn't see where to tap to wake it, defeating the
+point of a wake-on-touch mechanism. The floor is enforced in three places so it can't be
+bypassed: the auto-dim level itself, the brightness slider's minimum (`lv_slider_set_range()`
+floors at `CONFIG_DIM_BRIGHTNESS_PCT`, not 0 — a manual setting can't go dimmer than the
+auto-dim level either), and a clamp applied to whatever value loads from NVS at boot (in case
+an older save predates this floor).
+
+**Light/Dark theme.** `config_manager` gained a persisted `dark_mode` bool. The interesting
+part is how the theme actually gets applied without touching any FROZEN screen's source:
+`ui.h`'s surface-color macros (`IVF_COLOR_BG/CARD/BORDER/TEXT/TEXT_MUTED/NAV/NAV_ACTIVE/
+NAV_INACTIVE`) were redefined from literal `lv_color_hex(...)` values into function-call
+macros (`ivf_color_bg()` etc., implemented in `ui.c`, resolving a `s_dark_mode` flag loaded
+once at the top of `ui_init()`). Every screen already sets its colors via
+`lv_obj_set_style_*(obj, IVF_COLOR_X, 0)` calls using these exact macro names — since the
+macro now expands to a function call instead of a literal, **every screen becomes
+theme-aware with zero bytes changed in its own source file**, Dashboard/Chart/Logs included.
+Semantic status colors (`IVF_COLOR_PRIMARY/GOOD/WARNING/DANGER`) stay literal — brand/status
+colors, deliberately identical in both themes.
+
+This does **not** apply live: colors are set once, when each screen is built, and all screens
+are built once at boot (`ui_init()`). Making a theme switch instant would mean re-styling
+every already-built widget on every screen — a much larger refactor than this feature
+warrants. Instead, `screen_settings.c`'s Theme picker calls `esp_restart()` immediately after
+persisting the new choice, so the device comes back up already in the new theme — a
+deliberate scope decision, not a limitation to fix later.
+
+Dark palette: `BG #121212`, `CARD #1E1E1E`, `BORDER #333333`, `TEXT #ECECEC`,
+`TEXT_MUTED #9E9E9E` (same as light's `NAV_INACTIVE`), `NAV #1A1A1A`,
+`NAV_ACTIVE #0D3D73`, `NAV_INACTIVE #707070` — standard Material-dark-style values, not
+derived from the light palette by any formula.
+
+**Files modified:** `main/ui/ui.h` (macros), `main/ui/ui.c` (resolver functions +
+`s_dark_mode` load in `ui_init()`), `main/data/config_manager.h/.c` (`dark_mode` field),
+`main/ui/screens/screen_settings.c` (real Theme row + reboot-on-change), plus the two Phase 6
+fixes above (`screen_settings.c` font changes, `config_manager.h/.c` + `screen_settings.c`
+brightness-floor clamps). No Dashboard/Chart/Logs source files touched — see TD-28.
+
+**Follow-up:** the four simple nav rows (Theme/Screen Timeout/Threshold (ppb)/TVOC High
+Threshold) shrunk from 44 px to 18 px each (`NAV_ROW_H`, new — split out from the old shared
+`ROW_H`) to fit the whole screen inside 430 px without scrolling, even with Alert Settings
+expanded. The Alert Settings header keeps its own `ALERT_HEADER_H` (44 px, unchanged) since it
+wasn't part of the ask and would have been too cramped for its icon+title+chevron at 18 px;
+the two-line Alert Settings rows (`ALERT_ROW_H`, 56 px) were left alone too. The brightness
+slider was also replaced with a dropdown (`BRIGHTNESS_OPTIONS`: 15/25/50/75/100%), matching
+every other field's picker pattern — the slider implementation is kept, not deleted, wrapped
+in `#if 0`/`#endif`.
+
+**Follow-up — one real fix inside the FROZEN `header_t` component:** the SD-card icon's
+default "absent" state (every screen uses this) recolored at `LV_OPA_30`, which *blends with*
+rather than replaces the bitmap's native dark pixels — the original dark pixels dominated
+regardless of theme, reading as a plausible faint grey by accident against Light's white
+header but indistinguishable from Dark's dark header background. Fixed to `LV_OPA_COVER` so
+the theme-aware color fully replaces the bitmap's color in both themes. This is a genuine,
+narrow exception to the Phase 5.2 header freeze, made only because it was pointed at directly
+and asked for — not a unilateral call. `ui/components/header/header.c`, one `case` block.
 
 ---
 
@@ -871,7 +1114,7 @@ Remove-Item -Recurse -Force build
 | # | Module | Status | Notes |
 |---|--------|--------|-------|
 | 1 | Hardware pin map | ✅ Complete | All GPIOs verified against CrowPanel v2.1 schematic |
-| 2 | Display driver | ✅ Complete | `esp_lcd_panel_rgb`, PSRAM fb, hardware portrait rotation (SWAP_XY+MIRROR_Y) |
+| 2 | Display driver | ✅ Complete, brightness added Phase 6 | `esp_lcd_panel_rgb`, PSRAM fb, hardware portrait rotation (SWAP_XY+MIRROR_Y); `display_set_brightness(0-100)` via LEDC PWM (was on/off-only `display_set_backlight(bool)` before Phase 6) |
 | 3 | Touch driver | ✅ Complete | Custom XPT2046 SPI driver, portrait axis remapping (map_x direct, map_y inverted) |
 | 4 | LVGL 8.4.0 port | ✅ Complete | Full-frame PSRAM draw buffer, `full_refresh=1`, `LV_DISP_ROT_NONE`, FreeRTOS task, mutex. Touch read callback swaps x↔y to correct axis convention (see Display Rotation). |
 | 5 | LVGL config | ✅ Complete | `CONFIG_LV_CONF_SKIP=y` — config via `sdkconfig.defaults`; light theme; Montserrat 12–48pt |
@@ -880,12 +1123,13 @@ Remove-Item -Recurse -Force build
 | 8 | `app_main.c` | ✅ Complete | Init sequence; `app_main` returns after `ui_init()` — no refresh task |
 | 9 | Sensor manager + backend | ✅ Phase 3B complete | Framework separated from backend. Active: `sensor_backend_sim.c`. Real driver goes in `sensor_backend_hw.c` (Phase 7). |
 | 10 | Alarm manager | ✅ Complete | Debounce (3 samples), 50-entry ring buffer, NVS ack |
-| 11 | NVS thresholds | ✅ Complete | Load on boot from `ivf_cfg`; save from Settings (Phase 6) |
+| 11 | NVS thresholds | ✅ Complete, TD-11 resolved for VOC | Load on boot from `ivf_cfg` via `config_manager`; VOC warn/alarm now saved live from Settings (Phase 6) with no-reboot reload (`sensor_manager_reload_thresholds()`, `alarm_manager_reload_thresholds()`); temp/humidity thresholds still boot-only |
 | 12 | Screen: Splash | ✅ Complete | Progress bar, 6-step timer, auto-advance to Dashboard |
 | 13 | UI framework | ✅ Phase 4B complete | Light theme, header builder, instant navigation. Phase 4B: nav drawer on `lv_layer_top()` replaces tab bar. Phase 4.1: reusable component layer added. |
 | 14 | Screen: Dashboard | ✅ Phase 4.2.6 complete · **FROZEN** | `header_t` + `card_t` + `voc_gauge_t`; title "DASHBOARD"; WiFi far right (x=244); SD removed; sparklines removed; `CARD_H=90`; full-screen drawer with new top section. |
 | 15 | Screen: Chart | ✅ Phase 5.6 complete · **FROZEN** | `header_t` (frozen) + `card_t` + real bitmap icon assets (Phase 5.4.1); Last 7 Days (default) / Today (simple 2-row dropdown, Phase 5.6) modes via `chart_mode_t` + `apply_chart_mode()`; live `history_manager` data (daily aggregates / hourly range); title + calendar button share Row A, dynamic title text ("Last 7 Days" / "Today"), mode-aware 4th stat card ("Days"/"Hours"), real-date X-axis labels (day-of-month for Last 7 Days, 4-hour boundaries for Today); axis tick labels visible (Phase 5.6 `clip_corner` fix); no return chip — the dropdown's "7 Days" option covers that |
-| 15.1 | History Manager backend | ✅ Phase 5.3 complete, API revised Phase 5.4 | `data/history_manager.c/.h` — 90-day hourly ring buffer (PSRAM, ~59 KB with min/max), fed from `sensor_manager.c`'s `sensor_task()`; read by Chart (`get_range`/`get_daily_aggregates`/`compute_stats`) since Phase 5.4 |
+| 15.1 | History Manager backend | ✅ Phase 5.3 complete, API revised Phase 5.4, extended Phase 5.8 | `data/history_manager.c/.h` — 90-day hourly ring buffer (PSRAM, ~59 KB with min/max), fed from `sensor_manager.c`'s `sensor_task()`; read by Chart (`get_range`/`get_daily_aggregates`/`compute_stats`) since Phase 5.4, and by Logs (`get_latest_n`, new Phase 5.8) for newest-first pagination |
+| 15.2 | Calendar utility (`data/calendar_util.c/.h`) | ✅ Phase 5.8 complete | Shared, LVGL-independent boot-ts → calendar-date/time conversion (Hinnant algorithm), used by Logs; Chart keeps its own private pre-existing copy (frozen, see TD-20) |
 | 16 | Navigation Drawer (`nav_drawer`) | ✅ Phase 4B complete | Floating `[≡]` button + slide-in drawer on `lv_layer_top()`; replaces bottom tab bar |
 | 16.1 | Shared UI components (`components/`) | ✅ Phase 4.1 complete | 7 reusable components: `navigation_drawer`, `header`, `circular_gauge`, `card`, `status_badge`, `icon_button`, `assets` |
 | 16.2 | `header_enable_menu()` | ✅ Phase 4.2.1 complete | Hamburger `[≡]` button in header; leaf icon hidden; title repositioned; callback-based — header does not own the drawer |
@@ -895,8 +1139,11 @@ Remove-Item -Recurse -Force build
 | 16.6 | Dashboard Final Polish | ✅ Phase 4.2.5 complete | Header 80 px right column (SD x=160, WiFi x=136); time/date right-aligned via `LV_ALIGN_TOP_RIGHT`; title fixed-width + `LV_LABEL_LONG_CLIP`; humidity `lbl_name` x 18→22; VOC gauge initialises to `NO_READING`; MODERATE badge dark text; `nav_drawer.c` removed from build |
 | 16.7 | Hardware Validation Polish | ✅ Phase 4.2.6 complete | WiFi far right (`HDR_WIFI_X=244`); SD icon removed; `HDR_TIME_ROFS=32`; title font `IVF_FONT_NORMAL`; title "DASHBOARD"; sparklines removed (`CARD_H=90`); drawer full-screen (480 px, y=0); `DRAWER_HEADER_H=148`; new top section (blue circle + shield + badge + title + pill); "TVOC Chart" / "Data Logs" nav item labels; version footer; `assets_draw_shield()` added; `assets_draw_humidity()` updated (16×22 teardrop) |
 | 16.8 | UI Freeze Fix | ✅ Phase 4.2.7 complete | `ui_refresh_task` removed from `app_main.c`; `ui_dashboard_refresh()` removed from `ui.c`/`ui.h`; dashboard refresh moved to `lv_timer_create(dash_timer_cb, 1000)` inside LVGL task; root cause: same-priority mutex starvation between tasks caused `lv_timer_handler()` skips, freezing animations and touch. TD-2 resolved. |
-| 17 | Screen: Logs | ⬜ Stub | Phase 5 — data log table not yet implemented |
-| 18 | Screen: Settings | ⬜ Stub | Phase 6 — brightness/threshold controls not yet implemented |
+| 17 | Screen: Logs | ✅ Phase 5.9 complete · **FROZEN** | `header_t` + `card_t` + `datalog_icon.c` bitmap; table card (header row + scrollable flex-column rows) reading `history_manager_get_latest_n()`; 10 rows/page, "Load More" pagination (capped at `LOGS_MAX_LOADED_ROWS`=100); Export CSV button is a visual placeholder (no SD storage yet, Phase 9); open questions on refresh cadence/event-driven rows tracked, not yet answered |
+| 18 | Screen: Settings | ✅ Phase 6.1 complete | `header_t` + `card_t`; scrollable content (flex-column); uniform 12px body text (Phase 6.1); brightness slider (live PWM preview, 15% floor); real Light/Dark Theme picker (reboots to apply); Screen Timeout / Threshold (ppb) / TVOC High Threshold / TVOC Alert Threshold / High Alert Threshold — all via one shared value-picker overlay; collapsible Alert Settings section |
+| 18.1 | Settings persistence (`data/config_manager.c/.h`) | ✅ Phase 6 complete, `dark_mode` added Phase 6.1 | NVS namespace `ivf_cfg` (shared with sensor_manager's pre-existing keys); brightness (15% floor)/timeout/display-range/VOC-warn/VOC-alarm/dark_mode; deliberately passive — never calls into display/sensor/alarm managers itself |
+| 18.2 | Screen dim/wake/timeout (`display/display_power.c/.h`) | ✅ Phase 6 complete, 15% floor Phase 6.1 | 500 ms tick (`ui.c`); dims to 15% (was 5%) after configured idle timeout; never dims during an active unacknowledged alarm (`alarm_manager_active_count()` gate); wake-on-touch consumes that touch (`lvgl_port.c`) rather than passing it through to a widget |
+| 18.3 | Light/Dark theme (`ui.h`/`ui.c`) | ✅ Phase 6.1 complete, new | `IVF_COLOR_*` surface macros redefined as function calls resolving a boot-time `s_dark_mode` flag — every screen (including frozen ones) becomes theme-aware with no source changes of its own; applies on next boot only (`esp_restart()` from Settings), not live — see TD-28 |
 
 ---
 
@@ -920,12 +1167,14 @@ Remove-Item -Recurse -Force build
 | 5.5 | Real Calendar Date Picker | ✅ COMPLETE, superseded by 5.6 | `screen_chart.c` — `lv_calendar` grid picker bounded to the 90-day retention window, dependency-free Hinnant calendar math |
 | 5.6 | Picker Simplification + Axis Label Fix | ✅ COMPLETE | `screen_chart.c` — calendar grid replaced with plain Today/7-Days dropdown; `clip_corner` removed (was hiding both axes' tick labels); title moved onto the calendar-button row; return chip removed (dropdown covers it); chart enlarged into reclaimed space (`CHART_H` 150→180) |
 | 5.7 | Chart Screen Freeze | ✅ COMPLETE | `screen_chart.c` — Chart screen declared **FROZEN**; no further changes without explicit approval, same standing as Dashboard |
-| 5 | Logs Screen | ⬜ PLANNED — next up | `screen_logs.c` — reads `data/history_manager.c/.h` (Phase 5.3, complete); `record_manager.c` retired |
-| 6 | Settings Screen | ⬜ PLANNED | `screen_settings.c`, `data/config_manager.c/.h`, `display_driver.c` |
+| 5.8 | Logs Screen | ✅ COMPLETE | `screen_logs.c` (rewritten), `data/history_manager.h/.c` (new `get_latest_n()`), `data/calendar_util.c/.h` (new, shared), `ui/assets/datalog_icon.c` (fixed + wired), `assets.c/.h`, `CMakeLists.txt` |
+| 5.9 | Logs Screen Freeze | ✅ COMPLETE | `screen_logs.c` — Logs screen declared **FROZEN**; no further changes without explicit approval, same standing as Dashboard/Chart. Open questions (refresh cadence, event-driven rows, real-data timing) documented, not resolved. |
+| 6 | Settings Screen | ✅ COMPLETE | `screen_settings.c` (rewritten), `data/config_manager.c/.h` (new), `display/display_power.c/.h` (new), `display_driver.c/.h` (brightness PWM), `sensor_manager.c/.h` + `alarm_manager.c/.h` (reload_thresholds), `lvgl_port.c` (wake-touch), `ui.c` (power timer) |
+| 6.1 | Font Size, Brightness Floor, Light/Dark Theme | ✅ COMPLETE | `screen_settings.c` (12px body text, real Theme row), `config_manager.h/.c` (15% brightness floor, `dark_mode`), `ui.h`/`ui.c` (theme-aware color macros, `esp_restart()`-on-change) |
 | 7 | Sensor Framework | ⬜ PLANNED | `sensors/sensor_backend_hw.c`, ENS160 + AHT21 driver files |
 | 8 | Alarm Framework | ⬜ PLANNED | `data/alarm_manager.c/.h`, alarm UI |
 | 9 | Storage Framework | ⬜ PLANNED | `data/history_manager.c` (NVS/SD persistence), `data/sd_export.c/.h`, SNTP |
-| 10 | Production Hardening | ⬜ PLANNED | OTA, watchdog, display sleep, memory audit |
+| 10 | Production Hardening | ⬜ PLANNED, display-dim done via Phase 6 | OTA, watchdog, memory audit — screen backlight dim-on-timeout now exists (`display_power.c`); true display/CPU sleep still not implemented |
 
 ---
 
@@ -2347,11 +2596,20 @@ The `HDR_TIME_COL_W=80` px reserved for time/date is sized for the Figma placeho
 | TD-12 | Bottom tab bar is still present in all four content screens. `ui_build_tab_bar()` calls and `IVF_TAB_H` references must be removed when nav drawer is implemented. | `screen_dashboard.c`, `screen_chart.c`, `screen_logs.c`, `screen_settings.c`, `ui.c`, `ui.h` | Phase 4B |
 | ~~TD-13~~ | ~~`circular_gauge.c` font references~~ | ~~`circular_gauge.c`~~ | ✅ Resolved Phase 4.2.4 — replaced `&lv_font_montserrat_48/16/12` with `IVF_FONT_HUGE/NORMAL/SMALL` |
 | ~~TD-14~~ | ~~`SAMPLE_AVG[]`/`SAMPLE_MAX[]` and hardcoded stat-card values~~ | ~~`screen_chart.c`~~ | ✅ Resolved Phase 5.4 — `apply_chart_mode()` now queries live `history_manager` data via `get_range()`/`get_daily_aggregates()`/`compute_stats()`; no more sample arrays |
-| TD-16 | `history_manager` retains only hourly-resolution records — no standing per-minute buffer beyond the single `history_manager_get_latest()` cache. If the future Logs table (Phase 5) needs true per-minute rows rather than hourly ones, a bounded minute-resolution tier must be added to `history_manager` (not a new standalone module — see the Phase 5 architecture-review note). | `data/history_manager.c` | Phase 5 |
+| TD-16 | `history_manager` retains only hourly-resolution records — no standing per-minute buffer beyond the single `history_manager_get_latest()` cache. **Settled in Phase 5.8**: the Logs screen deliberately shows one row per hourly record rather than per-minute, because a full 90-day per-minute buffer would need ~2.5 MB (129,600 records) — more than this board's total 2 MB PSRAM. Not revisiting unless a future requirement genuinely needs per-minute granularity and a memory budget is found for it. | `data/history_manager.c`, `screen_logs.c` | Not scheduled |
 | ~~TD-15~~ | ~~Static illustrative `MONTHS[6]` X-axis labels~~ | ~~`screen_chart.c`~~ | ✅ Resolved Phase 5.4 (mode-aware relative labels), then Phase 5.5 (`s_day_axis_labels[]`/`HOUR_LABELS[]` now show real calendar dates, not relative text) |
 | TD-17 | Chart day boundaries are computed from a fixed reference date anchored to boot-relative `esp_timer` time (see `calendar_init_reference()`), not a real wall-clock/RTC read — "today" is correct only as long as the device has been running continuously since the anchor was set. The Last-7-Days X-axis dates and Today's day-boundary lookup are otherwise fully general; only `calendar_init_reference()`'s fixed `CHART_REF_YEAR/MONTH/DAY` constants need to change once RTC/SNTP exists (Phase 7) — no other function in `screen_chart.c` needs to change. | `screen_chart.c` | Phase 7 |
 | TD-18 | Full visual verification of a populated "Last 7 Days" view requires 7 real days of device uptime (the simulated backend runs in real wall-clock time) — not exercised end-to-end. Cold-start / partial-history states (`"--"` cards, empty chart) and the Phase 5.6 axis-label fix were verified by code inspection only, no device/simulator available in this environment. | `screen_chart.c`, `data/history_manager.c` | Soak test + flash-and-look before final sign-off |
 | TD-19 | Chart's Today/7-Days picker is a fixed 2-option dropdown (Phase 5.6) — arbitrary-date selection was deliberately deferred (see Phase 5.5, superseded). The dependency-free calendar math (`days_from_civil`/`civil_from_days`/etc.) needed to bring it back already exists and is exercised daily by the Last-7-Days labels and Today's boundary calc, so re-adding a calendar-grid picker later is additive, not a rewrite. | `screen_chart.c` | Not scheduled |
+| TD-20 | `screen_chart.c` and `data/calendar_util.c` each contain their own copy of the same Hinnant calendar-conversion algorithm. Phase 5.8 introduced `calendar_util.c` as the shared version for new consumers (Logs) specifically *because* Chart is FROZEN (Phase 5.7) and could not be refactored to use it without touching a frozen file. De-duplicate by switching `screen_chart.c` to `calendar_util.c` once Chart is unfrozen — behavior-preserving, not a functional change. | `screen_chart.c`, `data/calendar_util.c` | When Chart is unfrozen |
+| TD-21 | Logs screen's "Export CSV" button is a visual placeholder — its click handler only logs a debug message. Real CSV export needs SD/flash write infrastructure that does not exist yet (`data/sd_export.c/.h`, Phase 9, `⬜ PLANNED`). | `screen_logs.c` | Phase 9 |
+| TD-22 | Logs screen's "Load More" pagination is capped at `LOGS_MAX_LOADED_ROWS` (100 rows / 10 pages) as an embedded-safety guard against unbounded LVGL object growth — clicking past the cap simply hides "Load More" even if older history remains within the 90-day window. Not expected to matter in practice (100 rows is far more than anyone pages through by hand), but worth knowing if a future requirement needs the full 2160-row history reachable via this control. | `screen_logs.c` | Not scheduled |
+| TD-23 | Logs screen has no live/periodic refresh — `screen_logs_refresh()` only fires on navigation into the screen, so a newly-completed hourly record does not appear until the user leaves and comes back. Whether Logs needs a live tick (and on what cadence, and whether it should preserve scroll position) is an open product question, not yet answered — see Phase 5.9's "What's pending" note. | `screen_logs.c` | Awaiting requirements |
+| TD-24 | No log row is ever produced by an *event* (e.g. an alarm threshold crossing) — every row comes from the fixed hourly cadence in `history_manager`. `history_record_t.alarm_state` exists as a field but is hardcoded to 0 everywhere; whether alarm events should someday produce their own out-of-band rows is undecided. | `data/history_manager.c`, `data/alarm_manager.c` | Phase 8 (alarm_manager integration) |
+| TD-25 | Settings' "Threshold (ppb)" and "TVOC High Threshold" (display-range values) are persisted via `config_manager` but consumed by nothing — their only plausible use (Dashboard gauge scale / Chart Y-axis range) sits in two FROZEN screens. Wiring them in requires an explicit decision to unfreeze Dashboard and/or Chart. | `screen_settings.c`, `screen_dashboard.c`, `screen_chart.c` | Awaiting unfreeze decision |
+| TD-26 | Temperature/humidity alarm thresholds (`TEMP_HIGH_C`/`TEMP_LOW_C`/`HUM_HIGH_PCT`/`HUM_LOW_PCT` in `alarm_manager.c`, `s_temp_warn_c` etc. in `sensor_manager.c`) have no Settings UI and no `config_manager` entries — only VOC warn/alarm got a live-reload path in Phase 6. They still require a firmware reboot to change (the original, still-partially-open TD-11). | `data/alarm_manager.c`, `sensors/sensor_manager.c` | Not scheduled |
+| TD-27 | `display_power.c`'s dim level (15%, `CONFIG_DIM_BRIGHTNESS_PCT`) and the alarm-active gate have not been visually/behaviorally verified on hardware — no device available in this environment. In particular, the touch-swallow wake behavior (`lvgl_port.c` reporting `LV_INDEV_STATE_RELEASED` for the waking touch) and the LEDC PWM brightness curve (is 15% duty actually visibly-dim-but-recoverable on this specific panel, or does it need further tuning?) should be the first things checked on a flash-and-look pass. | `display/display_power.c`, `display/display_driver.c`, `lvgl_port/lvgl_port.c` | Flash-and-look before sign-off |
+| TD-28 | Light/Dark theme (Phase 6.1) reaches Dashboard/Chart/Logs' rendered colors purely by redefining the `IVF_COLOR_*` macros in `ui.h` from literals into function calls — no byte of any of those three frozen screens' own source was touched, but their *rendered appearance* now depends on a global setting none of them were reviewed against. One real source-level fix was already needed and made (header.c's SD-icon "absent" state was recoloring at 30% opacity, which blends with — doesn't replace — the bitmap's native dark pixels, so it read as black in Dark mode; fixed to full opacity). Worth a specific look on a flash-and-look pass for anything similar elsewhere: low-opacity icon recolors, hardcoded colors that bypass `IVF_COLOR_*`, or the chart's fixed-color series lines against a dark background. | `ui/ui.h`, `ui/ui.c`, `screen_dashboard.c`, `screen_chart.c`, `screen_logs.c`, `ui/components/header/header.c` | Flash-and-look before sign-off |
 
 ---
 

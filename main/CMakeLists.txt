@@ -2,6 +2,7 @@ idf_component_register(
     SRCS
         "app_main.c"
         "display/display_driver.c"
+        "display/display_power.c"   # Phase 6 — screen dim/wake/timeout state machine
         "touch/touch_driver.c"
         "lvgl_port/lvgl_port.c"
         "ui/ui.c"
@@ -17,6 +18,8 @@ idf_component_register(
         # "sensors/sensor_backend_hw.c"     # real HW:   uncomment for Phase 7
         "data/alarm_manager.c"
         "data/history_manager.c"    # Phase 5.3 — history backend (LVGL/UI independent)
+        "data/calendar_util.c"      # Phase 5.8 — shared boot-ts -> calendar-date math (LVGL/UI independent)
+        "data/config_manager.c"     # Phase 6 — settings persistence (LVGL/UI independent)
         # ── Phase 4.1 — Shared UI components ──────────────────────────────────
         "ui/assets/assets.c"
         "ui/assets/menu_burger_horizontal_bold.c"
@@ -35,6 +38,8 @@ idf_component_register(
         "ui/assets/chart_average_icon.c"
         "ui/assets/chart_maximum_icon.c"
         "ui/assets/chart_minimum_icon.c"
+        # ── Logs screen icon — real bitmap (Phase 5.8) ──────────────────────────
+        "ui/assets/datalog_icon.c"
         "ui/components/status_badge/status_badge.c"
         "ui/components/icon_button/icon_button.c"
         "ui/components/card/card.c"

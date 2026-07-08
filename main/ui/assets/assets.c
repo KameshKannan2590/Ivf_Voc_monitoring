@@ -239,3 +239,14 @@ void assets_draw_chart_min(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_colo
     lv_obj_set_style_img_recolor(img, color, 0);
     lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
 }
+
+/* ── Data-log icon (18×18 px) — real bitmap: icon-park-solid:log ──────── */
+
+void assets_draw_datalog_icon(lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color)
+{
+    lv_obj_t *img = lv_img_create(parent);
+    lv_img_set_src(img, &datalog_icon);
+    lv_obj_set_pos(img, x, y);
+    lv_obj_set_style_img_recolor(img, color, 0);
+    lv_obj_set_style_img_recolor_opa(img, LV_OPA_COVER, 0);
+}

@@ -54,6 +54,13 @@ void assets_draw_chart_average  (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, l
 void assets_draw_chart_max      (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 16×16 — legend + MAX stat card            */
 void assets_draw_chart_min      (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 16×16 — MIN stat card                     */
 
+/* Logs screen icon — real bitmap (datalog_icon.c), the "Total record" badge
+ * on the Logs screen itself. Distinct from icon_park_solid_log (used only
+ * by the nav-drawer's "Data Logs" item, data_log_icon.c) — same underlying
+ * icon, separately re-exported, kept as two symbols to avoid a duplicate
+ * lv_img_dsc_t definition across the two source files. */
+void assets_draw_datalog_icon   (lv_obj_t *parent, lv_coord_t x, lv_coord_t y, lv_color_t color); /* 18×18 — Logs screen "Total record" badge  */
+
 /* -----------------------------------------------------------------------
  * Bitmap image forward declarations (stubs — uncomment when files added)
  *
@@ -79,6 +86,7 @@ LV_IMG_DECLARE(ic_outline_date_range);        /* date_range_icon.c      — 16×
 LV_IMG_DECLARE(carbon_chart_average);         /* chart_average_icon.c   — 16×16 */
 LV_IMG_DECLARE(tdesign_chart_maximum);        /* chart_maximum_icon.c   — 16×16 */
 LV_IMG_DECLARE(tdesign_chart_minimum);        /* chart_minimum_icon.c   — 16×16 */
+LV_IMG_DECLARE(datalog_icon);                 /* datalog_icon.c         — 18×18 */
 
 /* LV_IMG_DECLARE(img_leaf);           */
 /* LV_IMG_DECLARE(img_thermometer);    */
