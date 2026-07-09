@@ -3,7 +3,7 @@
 **Device:** CrowPanel DIS06043H v2.1 (ESP32-S3 N4R2, 480×272 RGB565)  
 **Stack:** ESP-IDF 5.3.1 · LVGL 8.4.0 (managed component)  
 **UI orientation:** Portrait 272×480 (hardware rotation via RGB panel SWAP_XY + MIRROR_Y)  
-**Last updated:** 2026-07-06 · **Phase 6.1 (Font Size, Brightness Floor, Light/Dark Theme) complete** · Phase 6 (Settings Screen + Brightness/Timeout) complete · Logs screen FROZEN (Phase 5.9) · Phase 5.8 (Logs Screen) complete · Chart screen FROZEN · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.1 (Chart UI Migration) complete · Phase 4.2.7 (UI Freeze Fix) complete · Dashboard FROZEN · UI freeze resolved
+**Last updated:** 2026-07-08 · **Phase 6.4 (Burger Width Tuning, Instant Drawer, Touch-Passthrough Fix) complete** · Phase 6.3 (Navigation Drawer & Burger Button Responsiveness) complete · Settings screen FROZEN (Phase 6.2) · Phase 6.1 (Font Size, Brightness Floor, Light/Dark Theme) complete · Phase 6 (Settings Screen + Brightness/Timeout) complete · Logs screen FROZEN (Phase 5.9) · Phase 5.8 (Logs Screen) complete · Chart screen FROZEN · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.1 (Chart UI Migration) complete · Phase 4.2.7 (UI Freeze Fix) complete · Dashboard FROZEN · UI freeze resolved
 
 ---
 
@@ -1683,6 +1683,161 @@ header.c` only, one `case` block.
 
 ---
 
+### ✅ Phase 6.2 — Settings Screen Freeze
+**Status: COMPLETE**
+
+The Settings screen (`screen_settings.c/.h`) is declared **FROZEN** — same standing as
+Dashboard, Chart, and Logs. No further changes without explicit approval.
+
+**What's done:** Brightness/Theme/Screen Timeout/Threshold (ppb)/TVOC High Threshold/TVOC
+Alert Threshold/High Alert Threshold — all dropdowns through one shared value-picker overlay;
+collapsible Alert Settings section; uniform 12px body text; fits inside 430px, no scrolling
+needed at current row heights. Two things behind the UI are real, end-to-end, not cosmetic:
+VOC warn/alarm changes actually reach both `sensor_manager` (gauge color classification) and
+`alarm_manager` (the real critical-alarm trigger — this closed a pre-existing gap where the
+two were never connected at all, see Phase 6) with live reload and no reboot; and brightness
+is real LEDC PWM, not a placeholder. One narrow, explicitly-requested exception was made to
+the Phase 5.2 header freeze (SD icon opacity, see above) — nothing else about Dashboard,
+Chart, or Logs was touched.
+
+**What's pending — open questions, not bugs, carried over from Phase 6/6.1 and not resolved
+by freezing:**
+- Display-range values ("Threshold (ppb)", "TVOC High Threshold") are persisted but consumed
+  by nothing — their only plausible use is Dashboard's gauge / Chart's Y-axis, both frozen.
+  See TD-25.
+- Temperature/humidity thresholds got no Settings UI or live-reload path — still boot-only,
+  still raw NVS reads, unlike VOC. See TD-26.
+- **Nothing in Phase 6/6.1/6.2 has been flashed or visually verified on real hardware** — the
+  LEDC brightness curve, wake-touch consumption, and dark-mode contrast/legibility across
+  every screen all need a real device. This is the biggest open item before treating any of
+  this as done rather than code-complete. See TD-27, TD-28.
+
+**Files affected:** none — status declaration only.
+
+**Next phase:** not yet scoped.
+
+---
+
+### ✅ Phase 6.3 — Navigation Drawer & Burger Button Responsiveness
+**Status: COMPLETE**
+
+**Reported:** the nav drawer feels laggy/slow when the burger icon is tapped, and the burger
+button itself seems to need a harder press to register. Investigated before changing
+anything, since "just remove the animation" and "just make the button bigger" are both
+plausible-sounding guesses that could be wrong.
+
+**Drawer animation:** confirmed a real `lv_anim_t`, 220ms, ease-out (`navigation_drawer.c`'s
+`slide()`) — not an unusual duration by itself (Material Design drawers commonly use
+~250ms), but this display does a **full-screen redraw every animation frame**
+(`lvgl_port.c`: `full_refresh=1`, full 480×272 PSRAM framebuffer via
+`esp_lcd_panel_draw_bitmap`), so the actual per-frame cost is display-throughput-bound —
+220ms nominal can visually stutter rather than glide. Cut to 120ms rather than removing the
+animation outright (user's choice between the two).
+
+**Burger button — a real, separate bug, not a touch-hardware issue.** Checked three possible
+causes before concluding: (1) the touch driver's pressure/Z threshold
+(`Z1_TOUCH_THRESHOLD=50` out of 4095) is negligibly low, not a "press harder" gate; (2) the
+Phase 6 wake-touch-swallow logic (`lvgl_port.c`) is real but only fires after the screen has
+auto-dimmed from idle — doesn't explain this on an already-awake screen; (3) `header.c`'s
+`HDR_BTN_W` was `20` pixels — but the file's **own header comment**, present since this
+component was written, has always documented "burger btn (44 px)" and "title starts at
+x=55". The code contradicted its own stated design. A 20px-wide tap target on a resistive
+touchscreen, combined with LVGL's default 10px scroll-tolerance (a touch that drifts more
+than 10px before release is treated as a drag, not a click, and silently drops the tap), is
+a much better fit for "needs a harder/more precise press" than any pressure-threshold theory.
+Restored `HDR_BTN_W` to the documented 44.
+
+**Trade-off, disclosed up front:** widening the button pushes the title's start position from
+x=31 to x=55, shrinking its available width from 101px to 77px
+(`HDR_TITLE_MAX_X - HDR_TITLE_X`, `LV_LABEL_LONG_CLIP` mode — truncates silently, no
+ellipsis). "DASHBOARD" (9 characters) is the longest title used anywhere and may not fit at
+77px by rough character-width estimate — not verifiable without hardware. Made the change
+anyway per explicit instruction ("check for 44px, if it changes design we revert back") —
+reverting is a single-constant edit (`HDR_BTN_W` back to `20`) if it's seen clipping on a
+real device.
+
+**This is the second narrow, explicitly-requested exception to the Phase 5.2 header
+freeze** (the first was the SD-icon opacity fix, same day). `navigation_drawer.c` is not, and
+has never been, declared frozen — that change needed no special dispensation.
+
+**Files modified:**
+- `main/ui/components/navigation_drawer/navigation_drawer.c` — animation 220ms → 120ms
+- `main/ui/components/header/header.c` — `HDR_BTN_W` 20 → 44
+
+**Known limitations:**
+- Not flashed/verified. Specifically needs checking: does "DASHBOARD" clip at the new title
+  width, and does 120ms actually feel smooth (vs. still-stuttery, given the full-redraw
+  cost is unchanged — only the nominal duration dropped).
+
+**Next phase:** not yet scoped.
+
+---
+
+### ✅ Phase 6.4 — Burger Width Tuning, Instant Drawer, Touch-Passthrough Fix
+**Status: COMPLETE**
+
+**Reported (on real hardware, after Phase 6.3):** three things. (1) "DASHBOARD" was clipping
+its last letter — the predicted risk from Phase 6.3's `HDR_BTN_W` 20→44 change, disclosed at
+the time in TD-29, now confirmed. (2) The 120ms drawer animation still read as slow — asked to
+try instant appearance instead. (3) A new bug: while the drawer is open, the screen behind it
+still responds to touch in the dimmed area — it shouldn't.
+
+**Burger button width, 44→30:** confirmed clipping means 44px was too wide a trade against
+title space. Settled on 30px — splits the difference: still 50% wider than the original 20px
+(the actual "needs a harder press" root cause from Phase 6.3), while giving the title 91px
+(`HDR_TITLE_MAX_X - HDR_TITLE_X`, up from 77px at 44px), enough for "DASHBOARD" (9 chars) to
+render without `LV_LABEL_LONG_CLIP` truncating it. Single-constant change, `header.c`'s
+`HDR_BTN_W`; its layout-derivation comment block and top-of-file diagram both updated to match.
+Third narrow, explicitly-requested exception to the Phase 5.2 header freeze (after the SD-icon
+opacity fix and the 20→44 width change).
+
+**Instant drawer, no animation:** `navigation_drawer.c`'s `slide()` no longer runs an
+`lv_anim_t` — it sets the drawer's x-position directly and shows/hides the backdrop in the
+same call. The 120ms (and, before that, 220ms) animated version is kept in an `#if 0` block,
+not deleted, along with its `drawer_anim_done_cb` ready-callback (which had done the
+backdrop-hide-on-close work; that logic now lives inline in the new `slide()` since there's no
+animation to attach a ready-callback to).
+
+**Touch passthrough — fixed defensively, root cause not fully confirmable in this
+environment.** The nav drawer's backdrop is a full-screen, clickable `lv_obj_create()` on
+`lv_layer_top()`, and LVGL's own indev hit-testing is specifically designed to check
+`lv_layer_top()` ahead of the active screen for exactly this "modal blocks what's behind it"
+case — by that design, this should not have been possible. Without access to this project's
+vendored LVGL 8.4.0 source in this environment to trace the actual dispatch order on this
+build, the fix was made at a lower level that is correct regardless of the underlying cause:
+`lvgl_touch_read_cb` (`lvgl_port.c`) now checks the raw touch point itself, before LVGL ever
+sees it. If the drawer is open and the touch lands at `x >= IVF_DRAWER_W` (in the dimmed area,
+outside the drawer's own 200px column), the callback closes the drawer directly
+(`ui_nav_drawer_close_from_touch()`, new in `ui.c`/`ui.h`) and reports the touch as released —
+so LVGL's own object dispatch never runs for that press, and nothing on the screen underneath
+can react to it. Taps within the drawer's own column are unaffected and still go through
+normal LVGL handling (nav items, drawer background).
+
+**Files modified:**
+- `main/ui/components/header/header.c` — `HDR_BTN_W` 44 → 30; comment blocks updated
+- `main/ui/components/navigation_drawer/navigation_drawer.c` — animated `slide()` replaced
+  with an instant version; old version kept `#if 0`'d
+- `main/ui/ui.h` / `main/ui/ui.c` — added `ui_nav_drawer_is_open()` and
+  `ui_nav_drawer_close_from_touch()`, thin wrappers around the existing
+  `navigation_drawer_is_open()`/`navigation_drawer_close()` so `lvgl_port.c` (which owns no
+  `navigation_drawer_t` handle) can reach drawer state
+- `main/lvgl_port/lvgl_port.c` — `lvgl_touch_read_cb` gates touches outside the drawer's width
+  while it's open, closing it directly instead of handing the press to LVGL
+
+**Known limitations:**
+- Not flashed/verified. Needs confirming: does "DASHBOARD" now render fully at 30px; does the
+  instant drawer feel right (vs. jarring) compared to the animated version; does the
+  touch-passthrough fix actually resolve the reported symptom, and does the same issue also
+  occur for taps landing directly on the drawer's own 200px column (not covered by this fix —
+  those still rely on LVGL's normal top-layer dispatch, which is the part whose behavior on
+  this build couldn't be independently confirmed).
+- The touch-passthrough root cause is not fully understood — the fix sidesteps it rather than
+  explaining it. See TD-30.
+
+**Next phase:** not yet scoped.
+
+---
+
 *(Phase 4C and Phase 4D, as originally sketched in earlier revisions of this log, are both
 superseded by Phase 5.3 and the Phase 5.4 review above.)*
 
@@ -1876,14 +2031,14 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 | `main/display/display_driver.c/.h` | ✅ Phase 2.1 complete, brightness added Phase 6 | ST7262 RGB565, PSRAM fb, SWAP_XY+MIRROR_Y hardware rotation; `display_set_backlight(bool)` replaced by `display_set_brightness(0-100)` via LEDC PWM |
 | `main/display/display_power.c/.h` | ✅ Phase 6 complete, new | Dim/wake/timeout state machine — 500 ms tick, dims to 5% after configured idle timeout, alarm-active gate, wake-on-touch |
 | `main/touch/touch_driver.c/.h` | ✅ Phase 2.1 complete | map_x direct, map_y inverted — correct for left-edge-up. `*x` = portrait_Y, `*y` = portrait_X (by design) |
-| `main/lvgl_port/lvgl_port.c/.h` | ✅ Phase 4A fix applied, wake-touch added Phase 6 | `LV_DISP_ROT_NONE`, full-frame PSRAM draw buffer. Phase 4A: x/y swap in `lvgl_touch_read_cb`. Phase 6: swallows the touch that wakes a dimmed screen (reports `LV_INDEV_STATE_RELEASED`) instead of passing it through to a widget |
+| `main/lvgl_port/lvgl_port.c/.h` | ✅ Phase 4A fix applied, wake-touch added Phase 6, drawer touch-gate added Phase 6.4 | `LV_DISP_ROT_NONE`, full-frame PSRAM draw buffer. Phase 4A: x/y swap in `lvgl_touch_read_cb`. Phase 6: swallows the touch that wakes a dimmed screen (reports `LV_INDEV_STATE_RELEASED`) instead of passing it through to a widget. Phase 6.4: also swallows touches outside the nav drawer's width while it's open, closing the drawer directly instead of relying on LVGL's own top-layer click dispatch |
 | `main/board/board.h` | ✅ Phase 1 complete | Central GPIO pin map |
 
 ### UI Framework
 | File | Status | Notes |
 |------|--------|-------|
-| `main/ui/ui.h` | ✅ Phase 4B complete, theme macros Phase 6.1 | `IVF_HEADER_H=50`, `IVF_CONTENT_H=430`, `IVF_DRAWER_W`, `IVF_NAV_BTN_SIZE`; tab bar constants removed; 8 surface-color macros (`IVF_COLOR_BG` etc.) redefined as function calls (`ivf_color_bg()` etc.) for Light/Dark theme support — every screen using them becomes theme-aware with no source change of its own |
-| `main/ui/ui.c` | ✅ Phase 4.2.7 updated, Phase 6 timer added, Phase 6.1 theme resolvers | LVGL timer `dash_timer_cb` (1 Hz, replaces `ui_refresh_task`); `ui_dashboard_refresh()` removed; `navigation_drawer_t` integration; `"TVOC Chart"` / `"Data Logs"` labels; `create_fab=false`; new 500 ms `power_timer_cb` → `display_power_tick()` (Phase 6); 8 `ivf_color_*()` functions + `s_dark_mode` loaded in `ui_init()` (Phase 6.1) |
+| `main/ui/ui.h` | ✅ Phase 4B complete, theme macros Phase 6.1, drawer-state accessors Phase 6.4 | `IVF_HEADER_H=50`, `IVF_CONTENT_H=430`, `IVF_DRAWER_W`, `IVF_NAV_BTN_SIZE`; tab bar constants removed; 8 surface-color macros (`IVF_COLOR_BG` etc.) redefined as function calls (`ivf_color_bg()` etc.) for Light/Dark theme support — every screen using them becomes theme-aware with no source change of its own; `ui_nav_drawer_is_open()`/`ui_nav_drawer_close_from_touch()` added (Phase 6.4) so `lvgl_port.c` can read/close drawer state without owning the `navigation_drawer_t` handle |
+| `main/ui/ui.c` | ✅ Phase 4.2.7 updated, Phase 6 timer added, Phase 6.1 theme resolvers, Phase 6.4 drawer accessors | LVGL timer `dash_timer_cb` (1 Hz, replaces `ui_refresh_task`); `ui_dashboard_refresh()` removed; `navigation_drawer_t` integration; `"TVOC Chart"` / `"Data Logs"` labels; `create_fab=false`; new 500 ms `power_timer_cb` → `display_power_tick()` (Phase 6); 8 `ivf_color_*()` functions + `s_dark_mode` loaded in `ui_init()` (Phase 6.1); `ui_nav_drawer_is_open()`/`ui_nav_drawer_close_from_touch()` implementations (Phase 6.4) |
 | `main/ui/nav_drawer.h` | ✅ Phase 4B complete | Legacy nav drawer API — retained as header only; `nav_drawer.c` removed from build |
 | `main/ui/nav_drawer.c` | ⛔ Phase 4.2.5 removed from build | Commented out in `CMakeLists.txt` — superseded by `navigation_drawer.c` (Phase 4.2.2) |
 | `main/ui/assets/assets.h` | ✅ Phase 4.2.6 updated | Drawn icon API: leaf, wifi, sd_card, thermometer, humidity, clock, chart, **shield** |
@@ -1893,13 +2048,13 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 | `main/ui/components/card/card.h/.c` | ✅ Phase 4.1 complete | Card container; `card_get_obj()` for positioning, `card_get_content()` for widgets |
 | `main/ui/components/circular_gauge/circular_gauge.h/.c` | ✅ Phase 4.2.4 updated | Progressive arc gauge; `circular_gauge_set_value_animated()`; font references fixed (TD-13 resolved) |
 | `main/ui/components/voc_gauge/voc_gauge.h/.c` | ✅ Phase 4.2.5 updated | Product-specific TVOC gauge; 4-zone progressive arcs; badge thresholds; 500 ms animation; `VOC_GAUGE_NO_READING` sentinel; MODERATE badge uses dark text |
-| `main/ui/components/header/header.h/.c` | ✅ Phase 4.2.6 updated | 272×50 header; WiFi far right (`HDR_WIFI_X=244`); SD icon removed; `HDR_TIME_ROFS=32`; `HDR_TITLE_MAX_X=156`; title font `IVF_FONT_NORMAL`; time/date right-aligned |
-| `main/ui/components/navigation_drawer/navigation_drawer.h/.c` | ✅ Phase 4.2.6 updated | Full-screen height (480 px, y=0); `DRAWER_HEADER_H=148`; top section (circle+shield+badge+title+pill); `header_title/header_status/footer_version` cfg fields; version footer; `#include "assets.h"` |
+| `main/ui/components/header/header.h/.c` | ✅ Phase 4.2.6 updated, SD-opacity + burger-width fixed Phase 6.1/6.3/6.4 | 272×50 header; WiFi far right (`HDR_WIFI_X=244`); SD icon removed; `HDR_TIME_ROFS=32`; `HDR_TITLE_MAX_X=156`; title font `IVF_FONT_NORMAL`; time/date right-aligned; SD "absent" icon opacity 30%→100% (Phase 6.1, dark-theme visibility); `HDR_BTN_W` 20→44→30 (Phase 6.3 then 6.4 — 44 clipped "DASHBOARD" on real hardware, confirmed; 30 is the settled value, giving the title 91px — see TD-29) — three narrow, explicitly-requested exceptions to the Phase 5.2 header freeze |
+| `main/ui/components/navigation_drawer/navigation_drawer.h/.c` | ✅ Phase 4.2.6 updated, animation shortened Phase 6.3, made instant Phase 6.4 | Full-screen height (480 px, y=0); `DRAWER_HEADER_H=148`; top section (circle+shield+badge+title+pill); `header_title/header_status/footer_version` cfg fields; version footer; `#include "assets.h"`; slide animation 220ms→120ms (Phase 6.3) then replaced with an instant jump (Phase 6.4, animated version kept `#if 0`'d) — never frozen |
 | `main/ui/screens/screen_splash.c/.h` | ✅ Phase 2 complete | Portrait size fix |
 | `main/ui/screens/screen_dashboard.c/.h` | ✅ Phase 4.2.6 complete · **FROZEN** | `header_t` + `card_t` + `voc_gauge_t`; title "DASHBOARD"; sparklines removed; `CARD_H=90`; `build_sensor_card()` simplified |
 | `main/ui/screens/screen_chart.c/.h` | ✅ Phase 5.6 complete · **FROZEN** | `header_t` (frozen) + `card_t` + real bitmap icon assets (Phase 5.4.1); `chart_mode_t` + `apply_chart_mode()` central controller; Last 7 Days (default) / Today (simple 2-row dropdown, Phase 5.6) modes; live `history_manager` data; title shares Row A with the calendar button; mode-aware 4th stat card; real-calendar-date X-axis labels; axis tick labels fixed (removed `clip_corner`); no return chip (dropdown covers it). |
 | `main/ui/screens/screen_logs.c/.h` | ✅ Phase 5.9 complete · **FROZEN** | `header_t` + `card_t` + `datalog_icon.c` bitmap; table card (header row + scrollable flex-column rows), 10/page, "Load More" pagination via `history_manager_get_latest_n()`; Export CSV is a visual placeholder; refresh-cadence/event-driven-row questions open (TD-23/TD-24) |
-| `main/ui/screens/screen_settings.c/.h` | ✅ Phase 6.1 complete | `header_t` + `card_t`; first screen with scrollable content (flex-column); uniform 12px body text; brightness slider (live PWM preview, 15% floor), real Light/Dark Theme picker (reboots to apply), Screen Timeout / 4 ppb-threshold rows via one shared value-picker overlay; collapsible Alert Settings section |
+| `main/ui/screens/screen_settings.c/.h` | ✅ Phase 6.2 complete · **FROZEN** | `header_t` + `card_t`; scrollable-if-needed content (flex-column), currently fits without scrolling; uniform 12px body text; Brightness/Theme/Screen Timeout/4 ppb-threshold rows all as dropdowns via one shared value-picker overlay (brightness slider kept, `#if 0`'d, not deleted); collapsible Alert Settings section |
 
 ### Data / Sensors
 | File | Status | Notes |
@@ -1981,6 +2136,10 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 | 2026-07-06 | Phase 5.9 Logs Screen Freeze (status declaration — Logs screen now FROZEN, same standing as Dashboard/Chart; refresh-cadence, event-driven-row, and real-data-timing questions documented as open, not answered) | n/a | 0 files changed |
 | 2026-07-06 | Phase 6 Settings Screen (`screen_settings.c` rebuilt from stub; new `data/config_manager.c/.h` + `display/display_power.c/.h`; `display_driver.c` gains real PWM brightness; `sensor_manager.c`/`alarm_manager.c` gain live threshold reload — fixes a pre-existing gap where alarm_manager's real trigger threshold was never connected to Settings/NVS at all; `lvgl_port.c` gains wake-on-touch consumption) | ⬜ not yet built — pending build + flash | 2 files created (`data/config_manager.h/.c`, `display/display_power.h/.c`); 8 files modified |
 | 2026-07-06 | Phase 6.1 Font Size, Brightness Floor, Light/Dark Theme (`screen_settings.c` body text unified to 12px; brightness floor 5%→15% enforced in 3 places; `ui.h`'s 8 surface-color macros redefined as theme-resolving function calls, making every screen — including frozen ones — theme-aware with zero source changes to them; Theme row now real, reboots via `esp_restart()` to apply) | ⬜ not yet built — pending build + flash | 0 files created; 4 files modified (`ui.h`, `ui.c`, `config_manager.h/.c`, `screen_settings.c`); no Dashboard/Chart/Logs source changes |
+| 2026-07-06 | Phase 6.1 follow-ups (nav row heights 44→18px so Settings fits without scrolling; slider knob clipping fixed then slider replaced entirely by a Brightness dropdown, 15/25/50/75/100%, slider code kept `#if 0`'d not deleted; header.c SD-icon opacity fix for dark-theme visibility — one narrow exception to the Phase 5.2 header freeze) | ⬜ not yet built — pending build + flash | 0 files created; `screen_settings.c` + `header.c` modified |
+| 2026-07-06 | Phase 6.2 Settings Screen Freeze (status declaration — Settings screen now FROZEN, same standing as Dashboard/Chart/Logs; display-range-not-consumed, temp/humidity-no-live-reload, and not-yet-flashed questions documented as open, not answered) | n/a | 0 files changed |
+| 2026-07-06 | Phase 6.3 Navigation Drawer & Burger Button Responsiveness (investigated 3 candidate causes for "needs a harder press" before fixing; `navigation_drawer.c` slide 220ms→120ms; `header.c` `HDR_BTN_W` 20→44, restoring the file's own documented-but-never-implemented 44px design — second narrow exception to the Phase 5.2 header freeze; title-width trade-off disclosed, see TD-29) | ⬜ not yet built — pending build + flash | 0 files created; 2 files modified (`navigation_drawer.c`, `header.c`) |
+| 2026-07-08 | Phase 6.4 Burger Width Tuning, Instant Drawer, Touch-Passthrough Fix (predicted TD-29 clipping confirmed on hardware; `header.c` `HDR_BTN_W` 44→30 — third narrow header-freeze exception; `navigation_drawer.c` slide animation replaced with instant jump, animated version kept `#if 0`'d; `lvgl_port.c` gates raw touch points outside the drawer's width while open, closing it directly instead of relying on LVGL's own top-layer dispatch; new `ui_nav_drawer_is_open()`/`ui_nav_drawer_close_from_touch()` in `ui.h`/`ui.c`) | ⬜ not yet built — pending build + flash | 0 files created; 5 files modified (`header.c`, `navigation_drawer.c`, `lvgl_port.c`, `ui.h`, `ui.c`) |
 
 ---
 

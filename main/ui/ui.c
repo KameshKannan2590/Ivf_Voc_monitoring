@@ -214,3 +214,13 @@ void ui_nav_drawer_toggle(void)
     navigation_drawer_toggle(s_nav_drawer);
 }
 
+bool ui_nav_drawer_is_open(void)
+{
+    return navigation_drawer_is_open(s_nav_drawer);
+}
+
+void ui_nav_drawer_close_from_touch(void)
+{
+    navigation_drawer_close(s_nav_drawer);
+}
+

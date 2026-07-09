@@ -54,14 +54,14 @@ lv_obj_t *screen_splash_create(void)
     /* ── Title ── */
     lv_obj_t *title = lv_label_create(s_scr);
     lv_label_set_text(title, "IVF VOC Monitor");
-    lv_obj_set_style_text_font(title, IVF_FONT_XLARGE, 0);
+    lv_obj_set_style_text_font(title, IVF_FONT_LARGE, 0);
     lv_obj_set_style_text_color(title, IVF_COLOR_PRIMARY, 0);
     lv_obj_align(title, LV_ALIGN_CENTER, 0, -60);
 
     /* ── Subtitle ── */
     lv_obj_t *sub = lv_label_create(s_scr);
     lv_label_set_text(sub, "Environmental Monitoring System");
-    lv_obj_set_style_text_font(sub, IVF_FONT_NORMAL, 0);
+    lv_obj_set_style_text_font(sub, IVF_FONT_SMALL, 0);
     lv_obj_set_style_text_color(sub, IVF_COLOR_TEXT_MUTED, 0);
     lv_obj_align(sub, LV_ALIGN_CENTER, 0, -28);
 

@@ -51,6 +51,7 @@ lv_color_t ivf_color_nav_inactive(void);
 /* Typography (montserrat sizes already enabled in sdkconfig) */
 #define IVF_FONT_TINY    (&lv_font_montserrat_10)
 #define IVF_FONT_SMALL   (&lv_font_montserrat_12)
+#define IVF_FONT_SMALL   (&lv_font_montserrat_12)
 #define IVF_FONT_NORMAL  (&lv_font_montserrat_16)
 #define IVF_FONT_MEDIUM  (&lv_font_montserrat_20)
 #define IVF_FONT_LARGE   (&lv_font_montserrat_24)
@@ -99,6 +100,21 @@ void ui_goto_screen(screen_id_t target, bool forward);
  * navigation_drawer_t handle directly; all navigation state lives in ui.c.
  */
 void ui_nav_drawer_toggle(void);
+
+/**
+ * Is the navigation drawer currently open? Used by lvgl_port.c's touch
+ * callback to gate touches that land outside the drawer while it is open
+ * (see ui_nav_drawer_close_from_touch) — see Phase 6.4 notes.
+ */
+bool ui_nav_drawer_is_open(void);
+
+/**
+ * Close the navigation drawer as a direct, synchronous reaction to a raw
+ * touch point outside its bounds. Does not go through LVGL's normal event
+ * dispatch — called from lvgl_touch_read_cb before that press is ever
+ * handed to LVGL, so the screen underneath the drawer never sees it.
+ */
+void ui_nav_drawer_close_from_touch(void);
 
 #ifdef __cplusplus
 }

@@ -45,6 +45,12 @@ struct navigation_drawer {
 
 /* ── Animation ──────────────────────────────────────────────────────────── */
 
+#if 0
+/* Animated slide (120ms, then 220ms before that) — replaced with an
+ * instant jump per request ("why can't it just appear so animation
+ * won't lag"), since every frame is a full-screen redraw
+ * (lvgl_port.c full_refresh=1) and even 120ms felt like lag on real
+ * hardware. Kept here, not deleted, in case animation is wanted back. */
 static void drawer_x_exec_cb(void *var, int32_t val)
 {
     lv_obj_set_x((lv_obj_t *)var, (lv_coord_t)val);
@@ -88,10 +94,30 @@ static void slide(struct navigation_drawer *d, bool open)
     lv_anim_set_var(&a, d->drawer);
     lv_anim_set_exec_cb(&a, drawer_x_exec_cb);
     lv_anim_set_values(&a, from_x, target_x);
-    lv_anim_set_time(&a, 220);
+    lv_anim_set_time(&a, 120);
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_ready_cb(&a, drawer_anim_done_cb);
     lv_anim_start(&a);
+
+    d->is_open = open;
+}
+#endif
+
+static void slide(struct navigation_drawer *d, bool open)
+{
+    lv_coord_t target_x = open ? 0 : -(lv_coord_t)d->cfg.drawer_width;
+
+    if (lv_obj_get_x(d->drawer) == target_x) return;
+
+    if (open) {
+        lv_obj_clear_flag(d->backdrop, LV_OBJ_FLAG_HIDDEN);
+    }
+
+    lv_obj_set_x(d->drawer, target_x);
+
+    if (!open) {
+        lv_obj_add_flag(d->backdrop, LV_OBJ_FLAG_HIDDEN);
+    }
 
     d->is_open = open;
 }
@@ -230,7 +256,7 @@ navigation_drawer_t *navigation_drawer_create(const nav_drawer_cfg_t *cfg)
         lv_obj_clear_flag(size_badge, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
 
         lv_obj_t *size_lbl = lv_label_create(size_badge);
-        lv_label_set_text(size_lbl, "36 \xc3\x97 36");
+        lv_label_set_text(size_lbl, "IVF EMS");
         lv_obj_set_style_text_font(size_lbl, IVF_FONT_SMALL, 0);
         lv_obj_set_style_text_color(size_lbl, IVF_COLOR_TEXT_MUTED, 0);
         lv_obj_align(size_lbl, LV_ALIGN_CENTER, 0, 0);

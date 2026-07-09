@@ -8,7 +8,7 @@
  * header.c — 272 × IVF_HEADER_H (50 px) screen header implementation
  *
  * Layout (left→right):
- *   5px | burger btn (44 px) | 6px | title label (clipped) | … |
+ *   5px | burger btn (30 px) | 6px | title label (clipped) | … |
  *   time/date stack (80 px) | 4px | wifi (20×20) | 4px | sd (20×20) | 8px
  *
  * Right-to-left derivation:
@@ -18,7 +18,7 @@
  *   time/date right edge                   = 216   (= 272 − 56)
  *   Widest date "May 24, 2026" ≈ 76 px → left edge ≈ 140.
  *   Title clips at 132 px so it never reaches the time/date column.
- *   Burger btn at x=5, title starts at x=55 (5+44+6).
+ *   Burger btn at x=5, title starts at x=41 (5+30+6).
  * ======================================================================= */
 
 /* ── Geometry ────────────────────────────────────────────────────────────── */
@@ -36,10 +36,17 @@
 /* Title clips before the time/date column (conservative 4 px gap). */
 #define HDR_TITLE_MAX_X (HDR_WIFI_X - 4 - HDR_TIME_COL_W - 4)               /* x = 132 */
 
-/* Burger button left margin and title gap */
+/* Burger button left margin and title gap.
+ * HDR_BTN_W history: was 20 (too small a hit target, "needs a harder
+ * press"), widened to 44 to match this file's original header comment —
+ * but 44 was confirmed on real hardware to clip the last letter of
+ * "DASHBOARD" (title width dropped to 77 px). Settled on 30 px as the
+ * middle ground: still 50% larger than the original 20 px hit target,
+ * while giving the title 91 px (HDR_TITLE_MAX_X - HDR_TITLE_X), enough
+ * for "DASHBOARD" (9 chars) to render unclipped at IVF_FONT_NORMAL. */
 #define HDR_BTN_X        5    /* burger button left edge                    */
-#define HDR_BTN_W       20    /* burger button width                        */
-#define HDR_TITLE_X     (HDR_BTN_X + HDR_BTN_W + 6)   /* = 31             */
+#define HDR_BTN_W       30    /* burger button width — see note above       */
+#define HDR_TITLE_X     (HDR_BTN_X + HDR_BTN_W + 6)   /* = 41             */
 
 /* ── Handle definition ───────────────────────────────────────────────────── */
 

@@ -8,6 +8,7 @@
 #include "esp_log.h"
 #include "display/display_driver.h"
 #include "display/display_power.h"
+#include "ui.h"
 
 #include "lvgl.h"
 #include "esp_heap_caps.h"
@@ -67,8 +68,26 @@ static void lvgl_touch_read_cb(lv_indev_drv_t *drv, lv_indev_data_t *data)
         display_power_notify_touch();
         /* touch_driver_read: *x = portrait_Y (0-479), *y = portrait_X (0-271).
          * LVGL ROT_NONE 272x480 expects point.x = portrait_X, point.y = portrait_Y. */
-        data->point.x = (lv_coord_t)y;
-        data->point.y = (lv_coord_t)x;
+        lv_coord_t point_x = (lv_coord_t)y;
+        lv_coord_t point_y = (lv_coord_t)x;
+
+        /* Nav drawer lives on lv_layer_top(), which LVGL's own indev hit-test
+         * is supposed to check ahead of the active screen — but that was not
+         * holding up on real hardware: taps in the dimmed area beyond the
+         * drawer's own width were still reaching whatever sat underneath on
+         * the active screen. Rather than trust that layering, decide this
+         * case ourselves before LVGL ever sees the press: swallow the touch
+         * and close the drawer directly, so nothing behind it is ever
+         * dispatched to. Taps within the drawer's own width fall through to
+         * normal LVGL handling (nav items, drawer background). */
+        if (ui_nav_drawer_is_open() && point_x >= IVF_DRAWER_W) {
+            ui_nav_drawer_close_from_touch();
+            data->state = LV_INDEV_STATE_RELEASED;
+            return;
+        }
+
+        data->point.x = point_x;
+        data->point.y = point_y;
         data->state   = LV_INDEV_STATE_PRESSED;
     } else {
         data->state = LV_INDEV_STATE_RELEASED;
