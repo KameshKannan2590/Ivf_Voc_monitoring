@@ -19,7 +19,6 @@ extern "C" {
 #define LCD_HSYNC_GPIO      39
 #define LCD_PCLK_GPIO       42
 #define LCD_BL_GPIO         2
-#define LCD_AUX_GPIO        38   /* extra GPIO, drive HIGH */
 
 /* Pixel clock ~7 MHz (safe for long flex cable) */
 #define LCD_PCLK_HZ         7000000

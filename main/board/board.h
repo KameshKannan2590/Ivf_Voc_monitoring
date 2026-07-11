@@ -23,7 +23,10 @@ extern "C" {
 #define BOARD_LCD_HSYNC     39
 #define BOARD_LCD_PCLK      42
 #define BOARD_LCD_BL        2    /* backlight — GPIO HIGH/LOW (PWM in Phase 6) */
-#define BOARD_LCD_AUX       38   /* drive HIGH — required by CrowPanel hardware */
+/* BOARD_LCD_AUX (GPIO38) removed Phase 6.1 — carried over from the generic
+ * CrowPanel reference example, but confirmed against this board's own
+ * schematic to not be required; freed for the I2C bus below (SCL). See
+ * WORKLOG.md Phase 6.1 for the removal rationale. */
 
 /* RGB data bus (16-bit) */
 #define BOARD_LCD_D0        8
@@ -50,9 +53,21 @@ extern "C" {
 #define BOARD_TOUCH_CS      0
 #define BOARD_TOUCH_INT     36
 
-/* ── I2C bus (sensors — SGP30/SHT31, populated in Phase 7) ─────────────── */
-#define BOARD_I2C_SDA       17   /* placeholder — verify against schematic */
-#define BOARD_I2C_SCL       18   /* placeholder — verify against schematic */
+/* ── I2C bus (sensors) ───────────────────────────────────────────────────
+ * Phase 6.1: wired up for the SHT41 temperature/humidity sensor. This is
+ * the board's "GPIO_D" expansion header (HY2.0-4P) — per Elecrow's own
+ * documentation, IO37/IO38 "can be used to simulate UART or IIC". GPIO38
+ * was previously reserved by this project as LCD_AUX (drive-HIGH); removed
+ * from display_driver.c after confirming against the board schematic that
+ * it isn't required, freeing it for I2C use here.
+ * sht41.h/.c define these same values locally (per this project's
+ * convention of driver headers owning their own pin macros); board.h
+ * remains the documentation reference.
+ * SDA/SCL assignment (which of IO37/IO38 is which) is this project's own
+ * convention, not something Elecrow's docs specify — confirm on first
+ * bring-up and swap if the sensor doesn't ACK. */
+#define BOARD_I2C_SDA       37
+#define BOARD_I2C_SCL       38
 
 #ifdef __cplusplus
 }

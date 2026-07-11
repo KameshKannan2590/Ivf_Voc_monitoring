@@ -1,5 +1,6 @@
 #include "sensor_manager.h"
 #include "sensor_backend.h"
+#include "sht41/sht41.h"
 #include "data/alarm_manager.h"
 #include "data/history_manager.h"
 #include "data/config_manager.h"
@@ -26,6 +27,11 @@ static float s_hum_high_warn  = 65.0f;
 static sensor_data_t     s_data;
 static SemaphoreHandle_t s_mutex = NULL;
 
+/* --- SHT41 (Phase 6.1) — has s_data.temperature_c/humidity_pct ever held a
+ * real SHT41 reading? Gates whether a comms failure can fall back to "last
+ * known good" (true) or must report sensor_ok=false (no reading yet). */
+static bool s_temp_hum_valid = false;
+
 /* --- Sensor task --- */
 static void sensor_task(void *arg)
 {
@@ -35,7 +41,28 @@ static void sensor_task(void *arg)
 
     while (1) {
         sensor_data_t fresh = {0};
-        sensor_backend_sample(&fresh);
+        sensor_backend_sample(&fresh);   /* VOC (simulated); temp/humidity overridden below */
+
+        float sht_temp, sht_hum;
+        if (sht41_read(&sht_temp, &sht_hum) == ESP_OK) {
+            if (!s_temp_hum_valid) {
+                ESP_LOGI(TAG, "SHT41 live data now available — dashboard will show real "
+                         "temperature/humidity from this cycle onward");
+            }
+            fresh.temperature_c = sht_temp;
+            fresh.humidity_pct  = sht_hum;
+            s_temp_hum_valid    = true;
+        } else if (s_temp_hum_valid) {
+            /* Transient I2C/CRC glitch — keep the last valid reading rather
+             * than blanking the dashboard or feeding history a bad value. */
+            ESP_LOGW(TAG, "SHT41 read failed — retaining last valid T=%.1fC H=%.0f%%",
+                     s_data.temperature_c, s_data.humidity_pct);
+            fresh.temperature_c = s_data.temperature_c;
+            fresh.humidity_pct  = s_data.humidity_pct;
+        } else {
+            ESP_LOGW(TAG, "SHT41 read failed — no valid reading yet");
+            fresh.sensor_ok = false;
+        }
 
         xSemaphoreTake(s_mutex, portMAX_DELAY);
         memcpy(&s_data, &fresh, sizeof(s_data));
@@ -91,6 +118,12 @@ esp_err_t sensor_manager_init(void)
 
     load_thresholds();
     sensor_backend_init();
+
+    esp_err_t sht_err = sht41_init();
+    if (sht_err != ESP_OK) {
+        ESP_LOGW(TAG, "SHT41 init failed: %s — dashboard will show \"--\" for "
+                 "temperature/humidity until the sensor responds", esp_err_to_name(sht_err));
+    }
 
     memset(&s_data, 0, sizeof(s_data));
 

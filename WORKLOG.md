@@ -3,7 +3,7 @@
 **Device:** CrowPanel DIS06043H v2.1 (ESP32-S3 N4R2, 480×272 RGB565)  
 **Stack:** ESP-IDF 5.3.1 · LVGL 8.4.0 (managed component)  
 **UI orientation:** Portrait 272×480 (hardware rotation via RGB panel SWAP_XY + MIRROR_Y)  
-**Last updated:** 2026-07-08 · **Phase 6.4 (Burger Width Tuning, Instant Drawer, Touch-Passthrough Fix) complete** · Phase 6.3 (Navigation Drawer & Burger Button Responsiveness) complete · Settings screen FROZEN (Phase 6.2) · Phase 6.1 (Font Size, Brightness Floor, Light/Dark Theme) complete · Phase 6 (Settings Screen + Brightness/Timeout) complete · Logs screen FROZEN (Phase 5.9) · Phase 5.8 (Logs Screen) complete · Chart screen FROZEN · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.1 (Chart UI Migration) complete · Phase 4.2.7 (UI Freeze Fix) complete · Dashboard FROZEN · UI freeze resolved
+**Last updated:** 2026-07-10 · **Phase 6.2 — SHT41 Hardware Bring-up & Live Sensor Verification complete, CONFIRMED on real hardware** (task-numbered "Phase 6.2"; distinct from the earlier Settings-Screen-Freeze "Phase 6.2" below) · Phase 6.1 — SHT41 Temperature & Humidity Sensor Integration complete (task-numbered "Phase 6.1"; distinct from the earlier Phase 6.1 below) · Phase 6.4 (Burger Width Tuning, Instant Drawer, Touch-Passthrough Fix) complete · Phase 6.3 (Navigation Drawer & Burger Button Responsiveness) complete · Settings screen FROZEN (Phase 6.2) · Phase 6.1 (Font Size, Brightness Floor, Light/Dark Theme) complete · Phase 6 (Settings Screen + Brightness/Timeout) complete · Logs screen FROZEN (Phase 5.9) · Phase 5.8 (Logs Screen) complete · Chart screen FROZEN · Phase 5.6 (Picker Simplification + Axis Label Fix) complete · Phase 5.5 (Real Calendar Date Picker) complete · Phase 5.4.1 (Real Bitmap Icons) complete · Phase 5.4 (Chart Mode Integration & History Binding) complete · Phase 5.3 (History Manager Backend) complete · Phase 5.2 (Chart Visual Polish) complete · Phase 5.1 (Chart UI Migration) complete · Phase 4.2.7 (UI Freeze Fix) complete · Dashboard FROZEN · UI freeze resolved
 
 ---
 
@@ -1838,6 +1838,382 @@ normal LVGL handling (nav items, drawer background).
 
 ---
 
+### ✅ Phase 6.1 — SHT41 Temperature & Humidity Sensor Integration
+**Status: COMPLETE · Build verified (`idf.py build`, exit 0, zero warnings/errors)**
+
+> Note on numbering: this phase's task title used "Phase 6.1", which collides with the earlier
+> **Phase 6.1 — Font Size, Brightness Floor, Light/Dark Theme** entry above. They are unrelated,
+> independently-scoped pieces of work; this entry is the hardware-integration one requested here.
+
+**Goal:** Replace the simulated temperature and humidity readings with real values from a
+Sensirion SHT41 (I2C) sensor, using the CrowPanel's existing (until now unused) I2C pins.
+VOC stays simulated. No UI layout, styling, screen architecture, History Manager API, or Alarm
+Manager API changes — the existing Dashboard/`sensor_manager` data flow picks up the real values
+automatically.
+
+**Design decisions:**
+- **Official Sensirion SHT4x protocol, not a generic SHT4x library port** — soft reset (`0x94`),
+  high-repeatability measurement (`0xFD`), 8.3 ms max conversion wait (10 ms used for margin),
+  6-byte read, Sensirion CRC-8 (poly `0x31`, init `0xFF`) validated independently for both the
+  temperature and humidity ticks, then the exact datasheet §4.6 conversion formulas. Heater
+  commands intentionally not implemented (out of scope for this phase per the brief).
+- **Driver owns its I2C bus, defensively.** `sht41.c` installs `I2C_NUM_0` itself
+  (`i2c_bus_ensure_init()`) rather than requiring an `app_main.c`/`sensor_manager.c` bus-init
+  call. `i2c_driver_install()` returning `ESP_ERR_INVALID_STATE` (bus already installed) is
+  treated as success, not an error — this is what lets a future TVOC sensor driver share the
+  same port without a refactor, directly satisfying the "modular for a future TVOC sensor"
+  requirement without inventing a separate shared-bus module for a single current consumer.
+- **Integration lives in `sensor_manager.c`, not a new backend file.** `sensor_backend_sample()`
+  (still `sensor_backend_sim.c`) continues to produce all three simulated values every cycle;
+  `sensor_task()` then calls `sht41_read()` and, on success, overwrites just
+  `fresh.temperature_c`/`fresh.humidity_pct` with the real reading before the existing
+  mutex-protected write to `s_data`. This was chosen over creating a third
+  `sensor_backend_*.c` variant (a "VOC-sim + T/H-hardware hybrid" backend) because the task's
+  data-flow diagram explicitly shows SHT41 feeding `sensor_manager` directly, and it keeps the
+  existing VOC-only backend-swap mechanism (`sensor_backend_sim.c` ↔ `sensor_backend_hw.c`,
+  Phase 7) completely untouched for when ENS160 is added later.
+- **Error handling favors "keep the last good reading" over "blank the dashboard."** A static
+  `s_temp_hum_valid` flag tracks whether any SHT41 read has ever succeeded. A failure *after* a
+  prior success re-uses the previous cycle's `s_data.temperature_c`/`humidity_pct` (logged via
+  `ESP_LOGW`) instead of blanking to `"--"` on a transient I2C glitch — the existing shared
+  `sensor_ok` flag would otherwise blank VOC too, which a one-off SHT41 hiccup shouldn't do. A
+  failure *before* any success sets `sensor_ok=false`, reusing the existing "no reading yet"
+  path (same one the gauge already uses at boot) — no new state machine needed.
+- The driver itself retries 3× internally (5 ms backoff) before `sensor_manager.c` ever sees a
+  failure, so a real fault has to persist across ~3 consecutive I2C transactions before it
+  surfaces as a fallback/log event.
+
+**Files created (2):**
+- `main/sensors/sht41/sht41.h` — `sht41_init()` / `sht41_read(&t, &h)`, no globals, no LVGL dependency
+- `main/sensors/sht41/sht41.c` — Sensirion command set, CRC-8, unit conversion, internal retry/timeout
+
+**Files modified (3):**
+- `main/sensors/sensor_manager.c` — `#include "sht41/sht41.h"`; `sht41_init()` called from
+  `sensor_manager_init()` (logs a warning, does not fail init, if the sensor doesn't respond);
+  `sensor_task()` overrides `fresh.temperature_c`/`humidity_pct` with `sht41_read()`'s result,
+  falling back to the last valid value (or `sensor_ok=false`) on failure; new static
+  `s_temp_hum_valid` bool
+- `main/CMakeLists.txt` — added `"sensors/sht41/sht41.c"` to `SRCS` (no new `INCLUDE_DIRS` entry
+  needed — `sensors` is already on the include path, so `sensor_manager.c` includes it as
+  `"sht41/sht41.h"`)
+- `main/board/board.h` — updated the I2C section comment to reflect Phase 6.1 (SHT41) instead of
+  the old "SGP30/SHT31, Phase 7" placeholder text; pin values (GPIO 17/18) unchanged
+
+**Files deliberately NOT modified:** `sensor_backend.h`, `sensor_backend_sim.c`,
+`sensor_backend_hw.c` (VOC backend-swap mechanism untouched), `screen_dashboard.c/.h`,
+`history_manager.c/.h`, `alarm_manager.c/.h`, `app_main.c`, any nav drawer / chart / logs /
+settings file.
+
+**I2C pins:** SDA = GPIO 17, SCL = GPIO 18, `I2C_NUM_0`, 100 kHz standard mode — the pins already
+reserved for sensors in `board.h` since Phase 1 (see TD-31: not confirmed against the physical
+schematic/silkscreen in this environment; no device available). **I2C address:** `0x44` (SHT4x
+default, ADR pin low).
+
+**Sensor polling interval:** unchanged — the existing 1 Hz `sensor_task()` in `sensor_manager.c`.
+No new FreeRTOS task (per the brief). `sht41_read()` adds ~11–15 ms of blocking I2C work
+(10 ms conversion wait + a few ms of I2C transaction time) inside that same 1000 ms cycle.
+
+**Build status:** `idf.py build` — **exit code 0, zero warnings, zero errors** (full log
+inspected, not just the exit code). Verified with the actual ESP-IDF v5.3.1 toolchain installed
+in this environment (`C:\Espressif\frameworks\esp-idf-v5.3.1`), not just by code review — this
+is a real compiled-and-linked confirmation that `sht41.c` and the `sensor_manager.c` changes are
+syntactically and semantically correct against the real ESP-IDF headers (`driver/i2c.h`, etc.),
+though it was not flashed to a physical device (none available in this environment).
+
+**Memory impact (before → after, `idf.py size`; before = this same tree with the Phase 6.1
+diff stashed out):**
+
+| Region | Before | After | Δ |
+|--------|-------:|------:|---:|
+| Flash `.text` (code) | 362,934 B | 371,854 B | +8,920 B |
+| Flash `.rodata`+`.appdesc` | 258,528 B | 263,612 B | +5,084 B |
+| Total flash image | 707,992 B | 727,288 B | +19,296 B |
+| DIRAM used | 140,595 B (41.14%) | 145,903 B (42.69%) | +5,308 B (+1.55 pp) |
+| — DIRAM `.bss` | 70,448 B | 70,464 B | +16 B (`s_i2c_ready`, `s_temp_hum_valid` statics) |
+| — DIRAM `.text` | 57,735 B | 62,995 B | +5,260 B (SHT41 driver + legacy `driver/i2c.c` linked in for the first time in this project) |
+| — DIRAM `.data` | 12,412 B | 12,444 B | +32 B |
+| IRAM | 16,383 B (99.99%, pre-existing) | 16,383 B (99.99%) | 0 B |
+| App partition free | 32% (0x53200 B) | 31% (0x4e6a0 B) | −22,368 B |
+
+The IRAM increase is 0 — the I2C driver's ISR handler is not IRAM-resident in this
+configuration, so it lands in the DIRAM `.text` growth instead. App partition remains at 31%
+free (1 MB partition) — no flash-size concern.
+
+**CPU impact:** `sensor_task()` (core 0, priority 3) now blocks for ~11–15 ms per 1000 ms cycle
+on I2C I/O (under 2% of that task's budget) — a small increase over the sim-only baseline, and
+entirely on core 0, so it cannot contend with the LVGL task (core 1) or its 5 ms tick. No new
+task, no change to any existing task's priority or core affinity.
+
+**Error handling strategy:** see "Design decisions" above — 3× internal driver retry, then
+sensor_manager falls back to the last known-good reading (logged via `ESP_LOGW`) or, if no
+reading has ever succeeded, `sensor_ok=false` (the pre-existing mechanism that blanks the
+dashboard to `"--"` and gates `history_manager_add_sample()`). Nothing in the path can block
+indefinitely (every I2C call has a bounded 50 ms timeout) or crash `sensor_manager_init()`
+(a failed `sht41_init()` is logged, not fatal).
+
+**Known limitations:**
+- Not flashed to a physical device in this environment — I2C pin assignment (GPIO 17/18) and the
+  0x44 address are carried over from this project's own prior documentation, not independently
+  re-verified against the CrowPanel schematic. See TD-31.
+- `sensor_manager.c`'s fallback read of `s_data.temperature_c`/`humidity_pct` on an SHT41 failure
+  happens outside `s_mutex` — safe today because `sensor_task()` is `s_data`'s sole writer, but
+  worth a second look if a second writer is ever introduced. See TD-32.
+- The shared `sensor_ok` flag still covers all three channels at once (unchanged from the
+  pre-existing struct design) — a *sustained* SHT41 outage before any successful reading would
+  still blank the (still-simulated, still-working) VOC gauge too. This is an accepted limitation
+  of the existing `sensor_data_t` design, not a new one introduced here, and only manifests
+  before the very first successful SHT41 read.
+- ENS160 warm-up handling, `SENSOR_LEVEL_WARMING`, and the VOC/TVOC hardware path remain
+  entirely out of scope for this phase (Phase 7, unstarted).
+
+**Next phase:** Phase 7 — VOC/TVOC via ENS160, sharing the I2C bus `sht41.c` already installs
+(AHT21 no longer needed there — see the updated Phase 7 entry below).
+
+---
+
+### ✅ Phase 6.1 follow-up — I2C pin correction (GPIO_D, not UART1) + AUX GPIO removal
+**Status: COMPLETE · Rebuilt, exit code 0, zero warnings/errors**
+
+**Context:** the initial Phase 6.1 write-up above used GPIO 17/18 as an unverified placeholder
+(inherited from the Phase 1 `board.h` comment). Reviewing Elecrow's own product page for this
+board ([elecrow.com](https://www.elecrow.com/wiki/esp32-display-432727-intelligent-touch-screen-wi-fi26ble-480272-hmi-display.html))
+surfaced the actual pin map for every expansion connector:
+
+| Port | Pins | Notes |
+|------|------|-------|
+| GPIO_D (HY2.0-4P) | IO37, IO38 | Elecrow: "can be used to simulate UART or IIC" |
+| UART1 (HY2.0-4P) | RX=IO18, TX=IO17 | Not used by this firmware (console is over USB-C / UART0) |
+| SPK/I2S (PH2.0-2P) | CTRL=3V3, MCLK=IO19, BCLK=IO35, SDIN=IO20 | Unused |
+| SD card (SPI) | MOSI=11, MISO=13, CLK=12, CS=10 | Unused (no SD driver yet) |
+
+GPIO 17/18 is actually the **UART1** header, not a documented I2C port — it happened to work as a
+placeholder only because it's electrically free (ESP32-S3's GPIO matrix routes I2C to any pin),
+not because it's the pins Elecrow intends for I2C. **GPIO_D (IO37/IO38) is Elecrow's own
+documented I2C-capable port**, so the driver was corrected to use it.
+
+**Complication found during the correction:** GPIO 38 was already committed in this project as
+`LCD_AUX_GPIO` — a pin `display_driver_init()` configures as output and drives HIGH once at
+boot, carried over from the official CrowPanel ESP-IDF reference example (previously cross-
+checked "Matches exactly" in this doc's compatibility table). Using GPIO 38 for I2C SCL would
+have fought that assignment (I2C reassigns the pin to the peripheral's open-drain clock
+function, which toggles — incompatible with "stays HIGH forever"). The user confirmed via their
+own copy of the board schematic that GPIO 38 isn't tied to anything requiring a permanent HIGH on
+this board, so the `gpio_config()`/`gpio_set_level(LCD_AUX_GPIO, 1)` block was removed from
+`display_driver_init()` entirely, freeing the pin for I2C. This was a deliberate, confirmed
+trade — not a guess — but it wasn't independently re-derived from a schematic in this session (no
+schematic file was available to Claude directly); if display behavior regresses, this removal is
+the first thing to revert (the prior block is in `git log`, not kept as dead/commented code).
+
+**Changes made:**
+- `main/board/board.h` — `BOARD_I2C_SDA`/`BOARD_I2C_SCL` changed `17`/`18` → `37`/`38`;
+  `BOARD_LCD_AUX` (GPIO 38) removed; comments updated to cite the Elecrow source and the AUX
+  removal rationale
+- `main/sensors/sht41/sht41.c` — `SHT41_I2C_SDA_GPIO`/`SHT41_I2C_SCL_GPIO` changed `17`/`18` →
+  `37`/`38`; header comment updated
+- `main/display/display_driver.c` — removed the `LCD_AUX_GPIO` `gpio_config()`/
+  `gpio_set_level()` block from `display_driver_init()` (5 lines)
+- `main/display/display_driver.h` — removed the now-unused `LCD_AUX_GPIO` define
+
+**Files deliberately NOT touched:** `sht41.h` (no pin constants there), `sensor_manager.c` (no
+pin knowledge — it only calls `sht41_init()`/`sht41_read()`), any UI/screen file.
+
+**Still open, not resolved by this change:**
+- **SDA/SCL polarity is a convention, not a verified fact.** Elecrow's docs say IO37/IO38 support
+  I2C but don't say which one is SDA vs. SCL — this project picked IO37=SDA, IO38=SCL. If the
+  sensor doesn't ACK on first bring-up, swap the two `#define`s in `sht41.c` before assuming a
+  deeper fault.
+- **The GPIO 38 / AUX removal rests on the user's schematic review, not on independently tracing
+  the net in this session** — worth a specific look on the flash-and-look pass, since it touches
+  a previously "verified against the official example" claim. See TD-33.
+- GPIO 17/18 (UART1) remain fully free and unused — available for a future UART1 use case, but
+  no longer relevant to I2C.
+
+**Build status:** `idf.py build` — exit code 0, zero warnings, zero errors (rebuilt after this
+change, full log inspected). Total flash image essentially unchanged (727,288 B → 727,240 B,
+−48 B from the removed AUX code — noise-level, not a meaningful memory delta).
+
+---
+
+### ✅ Phase 6.2 — SHT41 Hardware Bring-up & Live Sensor Verification
+**Status: COMPLETE · Build verified · Physical bring-up CONFIRMED on real hardware — flashed, SHT41 communicating correctly, Dashboard showing live values, display/touch unaffected by the GPIO 38 (AUX) removal**
+
+**Goal:** Prepare the SHT41 integration for physical bring-up — verify the Phase 6.1/6.1-follow-up
+pin/address decisions still hold, add enough `ESP_LOGI()`/`ESP_LOGE()` tracing to diagnose the
+sensor over the serial monitor stage-by-stage, and make sure a non-responding sensor fails
+loudly (in the log) but gracefully (in the running app), per the brief. No Dashboard, Chart,
+History Manager, Alarm Manager, or Navigation Drawer changes — confirmed by diff, this touched
+only `main/sensors/sht41/sht41.c` and `main/sensors/sensor_manager.c`.
+
+**1. Review of the Phase 6.1 implementation:** re-read `sht41.c`/`sensor_manager.c` end to end.
+Found one real gap: `sht41_init()` unconditionally logged `"SHT41 initialized"` at the end even
+when the soft-reset probe had just failed (i.e., even when the sensor was *not* actually
+detected) — the log message contradicted reality. Fixed as part of this phase (see below); this
+was the main reason a review pass mattered here, not just a formality.
+
+**2. I²C pins verified:** SDA=GPIO 37, SCL=GPIO 38 — the "GPIO_D" expansion header, confirmed in
+the Phase 6.1 follow-up against Elecrow's own board documentation and the user's schematic
+(GPIO 38 was freed from the previous `LCD_AUX_GPIO` drive-HIGH requirement). Unchanged this
+phase — this phase's job was to verify, not re-derive, that decision.
+
+**3. I²C address verified:** `0x44` — SHT4x family default (ADR pin low). No board-specific
+override; this is a sensor-datasheet constant, not something the board schematic affects.
+
+**4. Debug logging added — one line per trace point requested, at the point it actually happens:**
+
+| Trace point | Location | Level | Example |
+|---|---|---|---|
+| I²C initialization | `i2c_bus_ensure_init()` | `ESP_LOGI` (start + success), `ESP_LOGE` (param/install failure) | `"Initializing I2C master: I2C0 SDA=GPIO37 SCL=GPIO38 100000 Hz"` → `"I2C master initialized successfully"` |
+| Sensor detection | `sht41_init()` (soft-reset probe) | `ESP_LOGI` (probing + detected), `ESP_LOGE` (not detected, with a wiring hint) | `"SHT41 detected and reset OK (I2C0 SDA=GPIO37 SCL=GPIO38 addr=0x44)"` |
+| Measurement command | `sht41_read_once()` | `ESP_LOGE` on failure (success is implied by reaching the next stage) | `"Measurement command (0xFD) failed: ESP_ERR_TIMEOUT"` |
+| CRC validation | `sht41_read_once()` | `ESP_LOGE`, names *which* field failed (temperature vs. humidity) with the raw bytes and both the calculated and received CRC byte; a pass is folded into the one success line below rather than logged separately (it's implied — conversion never runs on a failed CRC) | `"CRC validation FAILED (temperature): raw=1A 2B 3C calc=0x9F recv=0x00"` |
+| Temperature / humidity reading | `sht41_read_once()`, on success | `ESP_LOGI`, one consolidated line | `"SHT41 read OK: CRC valid, temperature=24.35 C, humidity=52.10 %RH"` |
+| Retry attempts | `sht41_read()` | `ESP_LOGW` per attempt (unchanged from Phase 6.1), `ESP_LOGE` once if all `SHT41_READ_RETRIES` (3) are exhausted (new this phase) | `"read attempt 2/3 failed: ESP_ERR_TIMEOUT"` → `"SHT41 read failed after 3 attempts (last error: ESP_ERR_TIMEOUT)"` |
+| First live data (dashboard transition) | `sensor_manager.c`'s `sensor_task()` | `ESP_LOGI`, once, on the first successful read after boot | `"SHT41 live data now available — dashboard will show real temperature/humidity from this cycle onward"` |
+
+**Design choice — why one consolidated success line per cycle, not five:** the sensor task runs
+at 1 Hz forever; logging every sub-step (command sent, raw bytes, CRC pass, temperature,
+humidity) as five separate `ESP_LOGI` lines every single second would make the serial monitor
+unreadable within minutes. Given `sdkconfig.defaults` only sets `CONFIG_LOG_DEFAULT_LEVEL_INFO`
+(no `CONFIG_LOG_MAXIMUM_LEVEL` override), `ESP_LOGD` calls would compile out entirely in this
+build — using them for the routine trace wasn't an option that would actually show up on the
+monitor. So the routine (success) path is one `ESP_LOGI` line with everything needed to confirm
+the cycle worked (CRC valid + both readings); the *failure* paths get one distinct `ESP_LOGE`
+line per failure type (command, I²C read, CRC-temperature, CRC-humidity) so a fault is fully
+diagnosable from a single log line without needing to correlate multiple lines. This satisfies
+every named trace point in the brief while keeping the monitor usable during an actual bring-up
+session.
+
+**5. Init failure reporting (brief item 5):** `sht41_init()` now distinguishes two failure
+classes clearly:
+- I²C bus install failure (`i2c_param_config`/`i2c_driver_install` genuinely failing, not the
+  tolerated `ESP_ERR_INVALID_STATE` "already installed" case) → `ESP_LOGE`, and `sht41_init()`
+  returns the real error to `sensor_manager_init()`, which itself already logs a warning and
+  continues (Phase 6.1 behavior, unchanged).
+- Sensor not detected (soft-reset command gets no ACK) → `ESP_LOGE` with an explicit wiring hint
+  (`"Check wiring (SDA=GPIO37, SCL=GPIO38) and sensor power."`) and a note that
+  `sensor_manager` will keep retrying — but `sht41_init()` still returns `ESP_OK` here (unchanged
+  contract from Phase 6.1), since the real recovery path is `sht41_read()`'s own retry loop
+  running every sensor cycle, not a one-shot init check. The previous version's misleading
+  unconditional `"SHT41 initialized"` log on this path is gone — it now only logs "detected and
+  reset OK" when that's actually true.
+
+**6. Sensor-not-detected behavior (brief item 6) — already correct from Phase 6.1, verified,
+not changed:** `sensor_manager.c`'s `sensor_task()` already (a) logs the reason
+(`ESP_LOGW`/`ESP_LOGE` from the driver, plus its own `"SHT41 read failed — no valid reading
+yet"` warning), (b) never blocks or crashes (every I²C call has a bounded 50 ms timeout), and
+(c) keeps the dashboard showing `"--"` until the first successful read (`sensor_ok=false` before
+`s_temp_hum_valid` ever becomes true), then switches to holding the *last valid* reading on any
+later transient failure rather than reverting to `"--"`. This phase's review confirmed this
+logic was already correct and added the "first live data" log (above) as the one genuinely
+missing piece — a clear signal, in the log, of exactly when the dashboard's numbers become real.
+
+**7. Dashboard auto-update (brief item 7):** unchanged and re-confirmed by re-reading
+`screen_dashboard_update()` — it calls `sensor_manager_get_data()` and renders whatever
+`sensor_data_t` currently holds. Since Phase 6.1 already wired `sensor_task()` to overwrite
+`fresh.temperature_c`/`humidity_pct` with `sht41_read()`'s result, no Dashboard code needed to
+change for real values to appear — confirmed by inspection, not by a new capability.
+
+**8/9. Architecture unchanged:** `sensor_manager.c`'s task/mutex/public-API shape, and
+`history_manager.h`/`alarm_manager.h`'s APIs, are untouched — confirmed by diff (only the two
+sensor files listed below changed).
+
+**Files modified (2):**
+- `main/sensors/sht41/sht41.c` — added the logging described above; fixed the misleading
+  unconditional "initialized" log on a failed detection; split the CRC check into two named
+  checks (temperature vs. humidity) instead of one combined condition, so a CRC failure log
+  says which field failed
+- `main/sensors/sensor_manager.c` — added the one "first live data" transition log in
+  `sensor_task()`; no logic change
+
+**Files deliberately NOT modified:** `sht41.h` (no new API — logging is internal to `sht41.c`),
+`sensor_backend*.c`, `history_manager.c/.h`, `alarm_manager.c/.h`, `screen_dashboard.c/.h`, any
+chart/logs/settings/nav-drawer file, `CMakeLists.txt` (no new files), `board.h` (pins unchanged
+from the Phase 6.1 follow-up).
+
+**I²C pins used:** SDA=GPIO 37, SCL=GPIO 38 (unchanged).  
+**I²C frequency:** 100 kHz standard mode (unchanged).  
+**Sensor address:** `0x44` (unchanged).
+
+**Expected serial monitor output — sensor present and responding (confirmed to match the
+pattern actually observed on real hardware; exact temperature/humidity values not recorded
+here):**
+```
+I (xxx) sht41: Initializing I2C master: I2C0 SDA=GPIO37 SCL=GPIO38 100000 Hz
+I (xxx) sht41: I2C master initialized successfully
+I (xxx) sht41: Probing SHT41 at address 0x44 (soft reset command 0x94)
+I (xxx) sht41: SHT41 detected and reset OK (I2C0 SDA=GPIO37 SCL=GPIO38 addr=0x44)
+I (xxx) sensor_mgr: Sensor manager initialized
+I (xxx) sensor_mgr: Sensor task running
+I (xxx) sht41: SHT41 read OK: CRC valid, temperature=24.35 C, humidity=52.10 %RH
+I (xxx) sensor_mgr: SHT41 live data now available — dashboard will show real temperature/humidity from this cycle onward
+I (xxx) sht41: SHT41 read OK: CRC valid, temperature=24.36 C, humidity=52.05 %RH
+... (one "SHT41 read OK" line every ~1 s thereafter)
+```
+
+**Expected serial monitor output — sensor absent/miswired:**
+```
+I (xxx) sht41: Initializing I2C master: I2C0 SDA=GPIO37 SCL=GPIO38 100000 Hz
+I (xxx) sht41: I2C master initialized successfully
+I (xxx) sht41: Probing SHT41 at address 0x44 (soft reset command 0x94)
+E (xxx) sht41: SHT41 NOT detected at address 0x44 — soft reset failed: ESP_ERR_TIMEOUT. Check wiring (SDA=GPIO37, SCL=GPIO38) and sensor power. sensor_manager will keep retrying every sample cycle.
+I (xxx) sensor_mgr: Sensor manager initialized
+I (xxx) sensor_mgr: Sensor task running
+W (xxx) sht41: read attempt 1/3 failed: ESP_ERR_TIMEOUT
+W (xxx) sht41: read attempt 2/3 failed: ESP_ERR_TIMEOUT
+W (xxx) sht41: read attempt 3/3 failed: ESP_ERR_TIMEOUT
+E (xxx) sht41: SHT41 read failed after 3 attempts (last error: ESP_ERR_TIMEOUT)
+W (xxx) sensor_mgr: SHT41 read failed — no valid reading yet
+... (repeats every ~1 s; dashboard shows "--" for temperature/humidity, VOC gauge still works from simulation)
+```
+
+**Wiring summary (GPIO_D header, HY2.0-4P connector) — confirmed working:**
+
+| SHT41 breakout pin | Connect to | Board signal |
+|---|---|---|
+| VDD | Board 3.3V | Powered and communicating — confirmed on hardware |
+| GND | Board GND | — |
+| SDA | GPIO 37 | GPIO_D pin — confirmed, no swap needed |
+| SCL | GPIO 38 | GPIO_D pin (formerly `LCD_AUX_GPIO`) — confirmed, no swap needed |
+
+Fallback checklist below is retained for reference (e.g. if a different SHT41 unit or a longer
+cable run behaves differently), but this exact pin configuration is now hardware-confirmed
+working, not just a predicted wiring plan:
+1. VDD/GND connected and at the right voltage (SHT41 is 1.08–3.6V per datasheet; this board is
+   3.3V logic, compatible).
+2. SDA/SCL not swapped — flip `SHT41_I2C_SDA_GPIO`/`SHT41_I2C_SCL_GPIO` in `sht41.c` if a future
+   wiring change causes no ACK.
+3. Confirm IO37/IO38 are the physical pins actually reached by the GPIO_D connector on the
+   specific board revision in use.
+
+**Build status:** `idf.py build` — **exit code 0, zero warnings, zero errors** (ESP-IDF v5.3.1
+toolchain in this environment, full log inspected). Flash image grew 727,240 B → 728,992 B
+(+1,752 B — the new log format strings and a handful of extra log-call sites; app binary
+0xB2010, 30% of the 1 MB app partition free, down from 31%).
+
+**Hardware bring-up — CONFIRMED.** Flashed to the physical CrowPanel with an SHT41 wired to the
+GPIO_D header. Result: sensor detected and communicating correctly over I2C at the configured
+pins/address (no SDA/SCL swap or address change was needed), Dashboard automatically shows live
+temperature/humidity (no Dashboard code change required — confirmed the existing
+`sensor_manager_get_data()` → `screen_dashboard_update()` path just works once real data flows
+in), and display/touch behavior is normal after the GPIO 38 (`LCD_AUX_GPIO`) removal — no
+regression observed. Per-cycle numeric readings are not recorded here (not required for this
+log); pin configuration and connectivity are the facts of record — see the summary below and
+TD-31/TD-33 in ARCHITECTURE.md, both now marked resolved-and-confirmed.
+
+**Confirmed configuration (hardware-verified):**
+
+| Item | Value | Status |
+|---|---|---|
+| I2C port | `I2C_NUM_0` | Confirmed |
+| SDA | GPIO 37 (GPIO_D header) | Confirmed — no swap needed |
+| SCL | GPIO 38 (GPIO_D header, formerly `LCD_AUX_GPIO`) | Confirmed — no swap needed |
+| I2C frequency | 100 kHz standard mode | Confirmed |
+| SHT41 address | 0x44 | Confirmed |
+| Pull-ups | ESP32-S3 internal (`GPIO_PULLUP_ENABLE`) | Confirmed sufficient — no external pull-ups needed |
+| Display/touch after AUX removal | Normal | Confirmed — no regression |
+
+---
+
 *(Phase 4C and Phase 4D, as originally sketched in earlier revisions of this log, are both
 superseded by Phase 5.3 and the Phase 5.4 review above.)*
 
@@ -1914,44 +2290,47 @@ to `history_manager` itself when this phase starts — not a new standalone modu
 
 ---
 
-### ⬜ Phase 7 — Sensor Framework (ENS160 + AHT21)
+### ⬜ Phase 7 — Sensor Framework (ENS160 — scope reduced by Phase 6.1)
 **Status: NOT STARTED**
 
-**Goal:** Fill in `sensor_backend_hw.c` with real ENS160 + AHT21 I2C sensor reads. One `CMakeLists.txt` line swap activates it — zero changes to `sensor_manager.c`, dashboard, alarm_manager, or any other module.
+**Goal:** Fill in `sensor_backend_hw.c` with a real ENS160 I2C TVOC read. Temperature/humidity
+are no longer part of this phase — Phase 6.1 already replaced them with real SHT41 readings
+(`main/sensors/sht41/`), so the AHT21 driver originally planned here is no longer needed; ENS160
+compensation reads the already-real `temperature_c`/`humidity_pct` `sensor_manager.c` provides.
+One `CMakeLists.txt` line swap still activates the VOC hardware path — zero changes to
+`sensor_manager.c`, dashboard, alarm_manager, or any other module.
 
 **Activation (one-line swap in `main/CMakeLists.txt`):**
 ```cmake
 # "sensors/sensor_backend_sim.c"   ← comment out
-  "sensors/sensor_backend_hw.c"    ← uncomment; ENS160+AHT21 TODOs filled
+  "sensors/sensor_backend_hw.c"    ← uncomment; ENS160 TODOs filled
 ```
 
 **Hardware:**
-- ENS160 + AHT21 combined module on I2C bus
-- I2C pins: SDA = GPIO 17, SCL = GPIO 18 (defined in `board.h`)
+- ENS160 module on I2C bus — shares `I2C_NUM_0` (SDA=GPIO 37, SCL=GPIO 38 — the "GPIO_D"
+  expansion header), which `sht41.c` (Phase 6.1) already installs; `i2c_driver_install()`'s
+  `ESP_ERR_INVALID_STATE` tolerance there exists specifically so this driver can call the same
+  install path without a bus conflict
 - ENS160 I2C address: 0x53 (ADDR pin low) or 0x52 (ADDR pin high) — confirm wiring
-- AHT21 I2C address: 0x38
 
 **Integration notes:**
-- Read AHT21 first → feed temp/hum to ENS160 compensation registers → read ENS160 TVOC
+- Feed the real `temperature_c`/`humidity_pct` (already available from `sensor_manager.c` via
+  SHT41, Phase 6.1) to ENS160's compensation registers → read ENS160 TVOC
 - ENS160 warm-up ~60 s before TVOC readings are valid — add `SENSOR_LEVEL_WARMING` state; badge shows `"Warming..."` during this period
 - Check ENS160 data validity flag before accepting readings
 - I2C transaction failure × 3 consecutive → set `sensor_ok=false` → dashboard shows `"--"` / `"ERROR"` badge
 
 **Files to modify:**
-- `main/sensors/sensor_backend_hw.c` — implement `sensor_backend_init()` (I2C bus + ENS160 mode + AHT21 probe) and `sensor_backend_sample()` (AHT21 → ENS160 compensation → ENS160 TVOC read)
-- `main/app_main.c` — add `i2c_master_init()` call before `sensor_manager_init()`
-- `main/board/board.h` — confirm I2C pin assignments (SDA=17, SCL=18 already defined)
-- `main/CMakeLists.txt` — swap sim → hw backend; add driver source files
+- `main/sensors/sensor_backend_hw.c` — implement `sensor_backend_init()` (ENS160 mode; I2C bus already installed by `sht41.c`) and `sensor_backend_sample()` (ENS160 compensation using `sensor_manager.c`'s real temp/humidity → ENS160 TVOC read)
+- `main/CMakeLists.txt` — swap sim → hw backend for the VOC path; add ENS160 driver source
 
 **Files to create:**
 - `main/sensors/ens160_driver.c/.h` — I2C mode set, TVOC read, compensation write, validity check
-- `main/sensors/aht21_driver.c/.h` — trigger/read/CRC; returns temperature and humidity
 
 **Acceptance criteria:**
-- Dashboard shows real TVOC, temperature, humidity (not sine wave)
+- Dashboard shows real TVOC (not sine wave); temperature/humidity already real since Phase 6.1
 - ENS160 warm-up: badge shows `"Warming..."` then transitions to `"GOOD"`/`"WARN"`/`"ALARM"` when valid
 - Sensor error displayed if I2C fails 3 consecutive times; recovers automatically on comms restore
-- AHT21 CRC check passes; invalid reads retried before reporting error
 
 ---
 
@@ -2028,11 +2407,11 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 ### Hardware / LVGL Port
 | File | Status | Notes |
 |------|--------|-------|
-| `main/display/display_driver.c/.h` | ✅ Phase 2.1 complete, brightness added Phase 6 | ST7262 RGB565, PSRAM fb, SWAP_XY+MIRROR_Y hardware rotation; `display_set_backlight(bool)` replaced by `display_set_brightness(0-100)` via LEDC PWM |
+| `main/display/display_driver.c/.h` | ✅ Phase 2.1 complete, brightness added Phase 6, `LCD_AUX_GPIO` removed Phase 6.1 | ST7262 RGB565, PSRAM fb, SWAP_XY+MIRROR_Y hardware rotation; `display_set_backlight(bool)` replaced by `display_set_brightness(0-100)` via LEDC PWM; GPIO 38 "Aux" drive-HIGH step removed (confirmed unneeded on this board's schematic), freeing the pin for I2C — see TD-33 |
 | `main/display/display_power.c/.h` | ✅ Phase 6 complete, new | Dim/wake/timeout state machine — 500 ms tick, dims to 5% after configured idle timeout, alarm-active gate, wake-on-touch |
 | `main/touch/touch_driver.c/.h` | ✅ Phase 2.1 complete | map_x direct, map_y inverted — correct for left-edge-up. `*x` = portrait_Y, `*y` = portrait_X (by design) |
 | `main/lvgl_port/lvgl_port.c/.h` | ✅ Phase 4A fix applied, wake-touch added Phase 6, drawer touch-gate added Phase 6.4 | `LV_DISP_ROT_NONE`, full-frame PSRAM draw buffer. Phase 4A: x/y swap in `lvgl_touch_read_cb`. Phase 6: swallows the touch that wakes a dimmed screen (reports `LV_INDEV_STATE_RELEASED`) instead of passing it through to a widget. Phase 6.4: also swallows touches outside the nav drawer's width while it's open, closing the drawer directly instead of relying on LVGL's own top-layer click dispatch |
-| `main/board/board.h` | ✅ Phase 1 complete | Central GPIO pin map |
+| `main/board/board.h` | ✅ Phase 1 complete, I2C corrected Phase 6.1 follow-up | Central GPIO pin map; I2C pins are SDA=37, SCL=38 — the "GPIO_D" expansion header (corrected from an initial GPIO 17/18 placeholder after checking Elecrow's own board docs); `BOARD_LCD_AUX` (38) removed (`sensors/sht41/sht41.c` defines the same pin values locally, per this project's per-driver-owns-its-pins convention) |
 
 ### UI Framework
 | File | Status | Notes |
@@ -2059,17 +2438,18 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 ### Data / Sensors
 | File | Status | Notes |
 |------|--------|-------|
-| `main/sensors/sensor_backend.h` | ✅ Phase 3B complete | Backend interface: `sensor_backend_init()` + `sensor_backend_sample()` |
-| `main/sensors/sensor_backend_sim.c` | ✅ Phase 3B complete | Sine-wave simulation — active backend, swap out in Phase 7 |
-| `main/sensors/sensor_backend_hw.c` | ⬜ Phase 7 stub | Real ENS160+AHT21 — fill TODOs in Phase 7 |
-| `main/sensors/sensor_manager.c/.h` | ✅ Phase 5.3 updated, Phase 6 threshold reload | Pure framework: task, mutex, NVS, public API — calls sensor_backend_*; `sensor_task()` also feeds `history_manager_add_sample()` every 60th iteration (Phase 5.3); VOC warn/alarm now sourced from `config_manager`, live-reloadable via `sensor_manager_reload_thresholds()` (Phase 6) |
+| `main/sensors/sensor_backend.h` | ✅ Phase 3B complete | Backend interface: `sensor_backend_init()` + `sensor_backend_sample()` — VOC path only as of Phase 6.1 |
+| `main/sensors/sensor_backend_sim.c` | ✅ Phase 3B complete, unchanged by Phase 6.1 | Sine-wave simulation of all 3 channels — VOC output is still used; its temp/humidity output is now discarded by `sensor_manager.c` in favor of real SHT41 readings. Swap out (VOC only) in Phase 7 |
+| `main/sensors/sensor_backend_hw.c` | ⬜ Phase 7 stub, scope reduced by Phase 6.1 | Real ENS160 TVOC only — fill TODOs in Phase 7 (AHT21 no longer needed here; temp/humidity already real via `sht41.c`) |
+| `main/sensors/sht41/sht41.h/.c` | ✅ Phase 6.1 complete, new | Sensirion SHT41 I2C driver — soft reset, high-rep measurement, CRC-8, unit conversion, internal 3× retry; owns/installs `I2C_NUM_0` (idempotent, shareable with a future ENS160 driver) |
+| `main/sensors/sensor_manager.c/.h` | ✅ Phase 5.3 updated, Phase 6 threshold reload, Phase 6.1 SHT41 integration | Pure framework: task, mutex, NVS, public API — calls sensor_backend_* for VOC (sim); calls `sht41_read()` directly for temp/humidity, falling back to the last valid value (or `sensor_ok=false` pre-first-reading) on failure; `sensor_task()` also feeds `history_manager_add_sample()` every 60th iteration (Phase 5.3); VOC warn/alarm sourced from `config_manager`, live-reloadable via `sensor_manager_reload_thresholds()` (Phase 6) |
 | `main/data/alarm_manager.c/.h` | ✅ Phase 6 — VOC threshold now runtime-configurable | Debounce (3 samples) + 32-entry ring buffer, ack/ack-all API unchanged; `VOC_ALARM_PPB` `#define` replaced with runtime `s_voc_alarm_ppb` sourced from `config_manager`, live-reloadable via `alarm_manager_reload_thresholds()` — this is the real critical-alarm trigger point behind Settings' "High Alert Threshold". Temp/humidity thresholds still fixed constants. |
 | `main/data/history_manager.c/.h` | ✅ Phase 5.3 complete, API revised Phase 5.4, extended Phase 5.8 | 90-day hourly ring buffer (PSRAM, ~59.1 KB with min/max), fed from `sensor_manager.c`; read by `screen_chart.c` since Phase 5.4 (`get_range`/`get_daily_aggregates`/`compute_stats`), and by `screen_logs.c` since Phase 5.8 (`get_latest_n`, O(count) newest-first pagination) |
 | `main/data/calendar_util.c/.h` | ✅ Phase 5.8 complete, new | Shared, LVGL-independent boot-ts → calendar date/time conversion; used by Logs; Chart keeps its own private frozen copy (TD-20) |
 | `main/data/record_manager.c/.h` | ⛔ Retired (Phase 5.3) | Superseded by `history_manager` — see Phase 5 note |
 | `main/data/config_manager.c/.h` | ✅ Phase 6 complete, `dark_mode` + 15% floor Phase 6.1 | NVS namespace `ivf_cfg` (shared with sensor_manager's pre-existing keys); brightness (15% floor, enforced on set + on NVS load)/timeout/display-range/VOC-warn/VOC-alarm/dark_mode; passive — never calls into display/sensor/alarm managers itself, `screen_settings.c` orchestrates |
 | `main/sensors/ens160_driver.c/.h` | ❌ Not created | Create in Phase 7 |
-| `main/sensors/aht21_driver.c/.h` | ❌ Not created | Create in Phase 7 |
+| `main/sensors/aht21_driver.c/.h` | ⛔ No longer planned | Superseded by Phase 6.1's `sht41.c` — temperature/humidity are already real; ENS160 (Phase 7) will read compensation values from `sensor_manager.c` directly instead |
 
 ### Application
 | File | Status | Notes |
@@ -2101,6 +2481,17 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 5. ~~**app_main.c tight coupling**~~: ✅ Resolved in Phase 4.2.7 — `ui_refresh_task` and `ui_dashboard_refresh()` removed. Dashboard refresh runs via LVGL timer `dash_timer_cb` inside `lv_timer_handler()`. TD-2 in ARCHITECTURE.md closed.
 
 6. **ENS160 I2C address**: confirm ADDR pin wiring before Phase 7 (0x52 or 0x53).
+
+7. ~~**SHT41 I2C pins/address**~~ ✅ **Resolved, confirmed on real hardware (Phase 6.2):**
+   SDA=GPIO 37, SCL=GPIO 38 (the "GPIO_D" expansion header), address 0x44 — flashed and
+   communicating correctly, no SDA/SCL swap or address change needed. See TD-31 in
+   ARCHITECTURE.md.
+
+8. ~~**`LCD_AUX_GPIO` (GPIO 38) removed**~~ ✅ **Resolved, confirmed on real hardware (Phase 6.2):**
+   this pin was previously configured as output and driven HIGH once at boot in
+   `display_driver_init()`, inherited from the official CrowPanel reference example. Removed to
+   free GPIO 38 for I2C SCL, based on the user's own schematic review. Flashed and verified —
+   display/touch behave normally with no regression. See TD-33 in ARCHITECTURE.md.
 
 ---
 
@@ -2140,6 +2531,9 @@ card CSV (long-term) so trend charts and logs survive a reboot.
 | 2026-07-06 | Phase 6.2 Settings Screen Freeze (status declaration — Settings screen now FROZEN, same standing as Dashboard/Chart/Logs; display-range-not-consumed, temp/humidity-no-live-reload, and not-yet-flashed questions documented as open, not answered) | n/a | 0 files changed |
 | 2026-07-06 | Phase 6.3 Navigation Drawer & Burger Button Responsiveness (investigated 3 candidate causes for "needs a harder press" before fixing; `navigation_drawer.c` slide 220ms→120ms; `header.c` `HDR_BTN_W` 20→44, restoring the file's own documented-but-never-implemented 44px design — second narrow exception to the Phase 5.2 header freeze; title-width trade-off disclosed, see TD-29) | ⬜ not yet built — pending build + flash | 0 files created; 2 files modified (`navigation_drawer.c`, `header.c`) |
 | 2026-07-08 | Phase 6.4 Burger Width Tuning, Instant Drawer, Touch-Passthrough Fix (predicted TD-29 clipping confirmed on hardware; `header.c` `HDR_BTN_W` 44→30 — third narrow header-freeze exception; `navigation_drawer.c` slide animation replaced with instant jump, animated version kept `#if 0`'d; `lvgl_port.c` gates raw touch points outside the drawer's width while open, closing it directly instead of relying on LVGL's own top-layer dispatch; new `ui_nav_drawer_is_open()`/`ui_nav_drawer_close_from_touch()` in `ui.h`/`ui.c`) | ⬜ not yet built — pending build + flash | 0 files created; 5 files modified (`header.c`, `navigation_drawer.c`, `lvgl_port.c`, `ui.h`, `ui.c`) |
+| 2026-07-10 | Phase 6.1 — SHT41 Temperature & Humidity Sensor Integration (new `sensors/sht41/sht41.h/.c`; `sensor_manager.c` calls `sht41_init()`/`sht41_read()`, overriding simulated temp/humidity, with last-known-good fallback on failure; `CMakeLists.txt` + `board.h` comment updated) | ✅ **First actual `idf.py build` run in this environment** — ESP-IDF v5.3.1 toolchain located and its broken Python venv repaired (missing packages installed; an `importlib.metadata` name-normalization mismatch for `ruamel.yaml`'s dist-info directory was worked around). 1408/1408 objects, **exit code 0, zero warnings, zero errors** (full log inspected). Re-verified with a stash/rebuild/pop cycle to get an exact before/after size delta (see Phase 6.1 write-up above) | 0xB1960 (713 KB, 31% free) — +19,296 B flash image vs. pre-Phase-6.1 baseline (0xACE00, 707,992 B) |
+| 2026-07-10 | Phase 6.1 follow-up — I2C pin correction (GPIO 17/18 → GPIO 37/38, "GPIO_D" header, per Elecrow's own board docs) + `LCD_AUX_GPIO` (38) removed from `display_driver.c`/`.h` (confirmed against user's schematic to be unneeded, freeing the pin for I2C) | ✅ Rebuilt, exit code 0, zero warnings, zero errors | 0xB1930 (713 KB, 31% free) — −48 B vs. the initial Phase 6.1 build (0xB1960), noise-level |
+| 2026-07-10 | Phase 6.2 — SHT41 Hardware Bring-up & Live Sensor Verification (bring-up debug logging added to `sht41.c`/`sensor_manager.c`: I2C init, sensor detection, measurement command, CRC validation (per-field), temperature/humidity reading, retry exhaustion, first-live-data transition; fixed a misleading "initialized" log that fired even when the sensor wasn't actually detected) | ✅ Rebuilt, exit code 0, zero warnings, zero errors. **Flashed and confirmed on real hardware** — SHT41 detected and communicating at SDA=GPIO37/SCL=GPIO38/0x44, Dashboard shows live values, display/touch unaffected by the GPIO 38 (AUX) removal | 728,992 B total image (+1,752 B vs. prior build — new log strings) |
 
 ---
 

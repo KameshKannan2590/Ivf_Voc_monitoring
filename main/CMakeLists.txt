@@ -16,6 +16,8 @@ idf_component_register(
         # ── Sensor backend (swap one line for Phase 7 real hardware) ──────────
         "sensors/sensor_backend_sim.c"      # simulation: comment out for real HW
         # "sensors/sensor_backend_hw.c"     # real HW:   uncomment for Phase 7
+        # ── Phase 6.1 — SHT41 temperature/humidity driver (real hardware) ──────
+        "sensors/sht41/sht41.c"
         "data/alarm_manager.c"
         "data/history_manager.c"    # Phase 5.3 — history backend (LVGL/UI independent)
         "data/calendar_util.c"      # Phase 5.8 — shared boot-ts -> calendar-date math (LVGL/UI independent)

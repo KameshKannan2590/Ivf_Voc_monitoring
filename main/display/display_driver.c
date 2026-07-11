@@ -102,14 +102,6 @@ esp_err_t display_driver_init(esp_lcd_panel_handle_t *out_panel)
         TAG, "Panel mirror_y failed"
     );
 
-    /* Aux GPIO required by CrowPanel hardware */
-    gpio_config_t aux_cfg = {
-        .pin_bit_mask = (1ULL << LCD_AUX_GPIO),
-        .mode         = GPIO_MODE_OUTPUT,
-    };
-    gpio_config(&aux_cfg);
-    gpio_set_level(LCD_AUX_GPIO, 1);
-
     display_set_brightness(100);
 
     ESP_LOGI(TAG, "RGB LCD ready");
